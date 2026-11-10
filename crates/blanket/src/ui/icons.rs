@@ -269,11 +269,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn app_icon_has_transparent_corners_and_opaque_center() {
+    fn app_icon_comes_from_the_logo_with_transparent_corners() {
         let (pixels, size) = app_icon_rgba(64);
         assert_eq!(pixels.len(), (size * size * 4) as usize);
         assert_eq!(pixels[3], 0, "corner is transparent");
         let center = ((32 * size + 32) * 4 + 3) as usize;
-        assert_eq!(pixels[center], 255, "center is opaque");
+        assert!(pixels[center] > 200, "center is (nearly) opaque: {}", pixels[center]);
     }
 }

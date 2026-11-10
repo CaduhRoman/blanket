@@ -59,6 +59,10 @@ clap = { workspace = true }
 # Servoshell uses ANGLE (EGL over Direct3D) instead of WGL on Windows; we do the same.
 servo = { version = "=0.8.0", default-features = false, features = ["no-wgl"] }
 
+[build-dependencies]
+# Scales docs/assets/logo.png into the application icons.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 

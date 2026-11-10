@@ -1,16 +1,32 @@
-// The logo rasterizer is shared with the browser; it only uses `std`.
-#[allow(dead_code)]
-mod app_icon {
-    include!("src/app_icon.rs");
-}
+//! Embeds the Windows resources and derives every application icon from one source
+//! image: `docs/assets/logo.png`. Replace that file to rebrand the browser — the
+//! executable icon (.ico), the window and taskbar icons and the README all follow.
+
+use std::path::PathBuf;
+
+use image::imageops::FilterType;
+use image::RgbaImage;
+
+const LOGO: &str = "../../docs/assets/logo.png";
+/// Sizes rendered for the window and taskbar icons at run time (raw RGBA in OUT_DIR).
+const RUNTIME_SIZES: [u32; 2] = [64, 256];
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/app_icon.rs");
+    println!("cargo:rerun-if-changed={LOGO}");
     println!("cargo:rerun-if-changed=resources/silk.jpg");
     println!("cargo:rerun-if-changed=resources/newtab.html");
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
+
+    let logo = image::open(LOGO)
+        .unwrap_or_else(|error| panic!("cannot read the application logo {LOGO}: {error}"))
+        .to_rgba8();
+    for size in RUNTIME_SIZES {
+        let pixels = scaled(&logo, size);
+        std::fs::write(out_dir.join(format!("icon-{size}.rgba")), pixels.as_raw()).expect("write icon");
+    }
+
     #[cfg(windows)]
     {
-        let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
         let icon_path = out_dir.join("blanket.ico");
         let mut resource = winresource::WindowsResource::new();
         resource
@@ -18,7 +34,7 @@ fn main() {
             .set("ProductName", "Blanket")
             .set("OriginalFilename", "blanket.exe");
         // Explorer, the taskbar and Alt+Tab use the icon embedded in the executable.
-        match std::fs::write(&icon_path, ico(&[16, 20, 24, 32, 40, 48, 64, 96, 128, 256])) {
+        match std::fs::write(&icon_path, ico(&logo, &[16, 20, 24, 32, 40, 48, 64, 96, 128, 256])) {
             Ok(()) => {
                 resource.set_icon(icon_path.to_str().expect("OUT_DIR is valid UTF-8"));
             },
@@ -30,10 +46,14 @@ fn main() {
     }
 }
 
+fn scaled(logo: &RgbaImage, size: u32) -> RgbaImage {
+    image::imageops::resize(logo, size, size, FilterType::Lanczos3)
+}
+
 /// An `.ico` file with one 32-bit BMP image per size.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn ico(sizes: &[u32]) -> Vec<u8> {
-    let images: Vec<Vec<u8>> = sizes.iter().map(|&size| bmp_entry(size)).collect();
+fn ico(logo: &RgbaImage, sizes: &[u32]) -> Vec<u8> {
+    let images: Vec<Vec<u8>> = sizes.iter().map(|&size| bmp_entry(&scaled(logo, size))).collect();
     let mut file = Vec::new();
     // ICONDIR: reserved, type 1 (icon), image count.
     file.extend_from_slice(&0u16.to_le_bytes());
@@ -57,8 +77,9 @@ fn ico(sizes: &[u32]) -> Vec<u8> {
 }
 
 /// BITMAPINFOHEADER + bottom-up BGRA pixels + an all-zero AND mask.
-fn bmp_entry(size: u32) -> Vec<u8> {
-    let (rgba, size) = app_icon::app_icon_rgba(size);
+fn bmp_entry(image: &RgbaImage) -> Vec<u8> {
+    let size = image.width();
+    let rgba = image.as_raw();
     let mask_row = size.div_ceil(32) * 4;
     let mut data = Vec::new();
     data.extend_from_slice(&40u32.to_le_bytes());
