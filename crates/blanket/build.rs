@@ -10,6 +10,20 @@ use image::RgbaImage;
 const LOGO: &str = "../../docs/assets/logo.png";
 /// Sizes rendered for the window and taskbar icons at run time (raw RGBA in OUT_DIR).
 const RUNTIME_SIZES: [u32; 2] = [64, 256];
+/// GStreamer/GLib libraries the executable imports (`dumpbin /dependents`).
+const DELAY_LOADED: &[&str] = &[
+    "glib-2.0-0.dll",
+    "gobject-2.0-0.dll",
+    "gio-2.0-0.dll",
+    "gstreamer-1.0-0.dll",
+    "gstbase-1.0-0.dll",
+    "gstapp-1.0-0.dll",
+    "gstplay-1.0-0.dll",
+    "gstvideo-1.0-0.dll",
+    "gstaudio-1.0-0.dll",
+    "gstwebrtc-1.0-0.dll",
+    "gstsdp-1.0-0.dll",
+];
 
 fn main() {
     println!("cargo:rerun-if-changed={LOGO}");
@@ -24,6 +38,21 @@ fn main() {
         let pixels = scaled(&logo, size);
         std::fs::write(out_dir.join(format!("icon-{size}.rgba")), pixels.as_raw()).expect("write icon");
     }
+
+    // With audio/video, GStreamer and GLib are loaded on first use rather than by the
+    // Windows loader, so `media_runtime` can first find them (next to the executable or in
+    // a system GStreamer install) and explain clearly when they are missing.
+    if std::env::var_os("CARGO_FEATURE_MEDIA").is_some() &&
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+    {
+        for dll in DELAY_LOADED {
+            println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{dll}");
+        }
+        println!("cargo:rustc-link-arg-bins=delayimp.lib");
+    }
+
+    #[cfg(windows)]
+    copy_angle_next_to_executable(&out_dir);
 
     #[cfg(windows)]
     {
@@ -43,6 +72,38 @@ fn main() {
         if let Err(error) = resource.compile() {
             println!("cargo:warning=could not embed Windows resources: {error}");
         }
+    }
+}
+
+/// Servo's rendering loads ANGLE with `LoadLibrary("libEGL.dll")`, so it must sit next to
+/// blanket.exe. The mozangle build leaves it in its own OUT_DIR; copy it into the profile
+/// folder (target\<profile>) so the built executable runs when opened directly.
+#[cfg(windows)]
+fn copy_angle_next_to_executable(out_dir: &std::path::Path) {
+    // OUT_DIR = target\<profile>\build\blanket-<hash>\out
+    let Some(build_dir) = out_dir.parent().and_then(std::path::Path::parent) else {
+        return;
+    };
+    let Some(profile_dir) = build_dir.parent() else {
+        return;
+    };
+    let newest_angle = std::fs::read_dir(build_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("mozangle-"))
+        .map(|entry| entry.path().join("out"))
+        .filter(|dir| dir.join("libEGL.dll").is_file())
+        .max_by_key(|dir| dir.join("libEGL.dll").metadata().and_then(|meta| meta.modified()).ok());
+    match newest_angle {
+        Some(angle) => {
+            for dll in ["libEGL.dll", "libGLESv2.dll"] {
+                if let Err(error) = std::fs::copy(angle.join(dll), profile_dir.join(dll)) {
+                    println!("cargo:warning=could not copy {dll} next to the executable: {error}");
+                }
+            }
+        },
+        None => println!("cargo:warning=ANGLE (libEGL.dll) not built yet; rebuild to place it next to blanket.exe"),
     }
 }
 

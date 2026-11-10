@@ -10,6 +10,8 @@ mod cli;
 mod events;
 mod keyutils;
 mod logging;
+#[cfg(windows)]
+mod runtime_files;
 mod metrics;
 mod protocol;
 mod ui;
@@ -40,6 +42,11 @@ fn main() -> ExitCode {
         },
     };
     let _log_guard = logging::init(&paths, cli.log_json);
+    // ANGLE and (with audio/video) the delay-loaded GStreamer must be findable first.
+    #[cfg(windows)]
+    if !runtime_files::prepare() {
+        return ExitCode::FAILURE;
+    }
     info!(version = env!("CARGO_PKG_VERSION"), profile = %paths.root().display(), "starting Blanket");
 
     // Servo's network stack and our download client both use rustls; install the

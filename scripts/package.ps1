@@ -48,6 +48,13 @@ $angle = Get-ChildItem target\release\build -Recurse -Filter libEGL.dll |
 if (-not $angle) { throw "ANGLE (libEGL.dll) not found under target\release\build" }
 Copy-Item (Join-Path $angle.DirectoryName "libEGL.dll"), (Join-Path $angle.DirectoryName "libGLESv2.dll") $stage
 
+# Visual C++ runtime (app-local), so a PC without the VC++ Redistributable runs it too.
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+$crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory -ErrorAction SilentlyContinue |
+    Sort-Object FullName -Descending | Select-Object -First 1
+if (-not $crt) { throw "Visual C++ runtime (VC\Redist\MSVC\...\x64\Microsoft.VC14x.CRT) not found" }
+Copy-Item "$($crt.FullName)\*.dll" $stage
+
 # GStreamer core and its dependencies.
 Copy-Item "$gst\bin\*.dll" $stage
 
