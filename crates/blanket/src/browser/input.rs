@@ -17,7 +17,7 @@ use url::Url;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::ModifiersState;
-use winit::window::CursorIcon;
+use winit::window::{CursorIcon, ResizeDirection};
 
 use super::Browser;
 use crate::keyutils::{CMD_OR_CONTROL, keyboard_event_from_winit};
@@ -37,6 +37,8 @@ pub struct InputState {
     /// drags (text selection, scrollbars) work across the chrome.
     pub page_capture: bool,
     pub ime_control: Option<EmbedderControlId>,
+    /// The pointer is on the window's resize border.
+    pub resize_edge: Option<ResizeDirection>,
 }
 
 impl Browser {
@@ -96,6 +98,9 @@ impl Browser {
         if let WindowEvent::CursorMoved { position, .. } = &event {
             self.input.cursor = Some(*position);
         }
+        if self.handle_resize_border(&event) {
+            return;
+        }
 
         let route_to_page = self.route_to_page(&event);
         self.update_pointer_target(route_to_page, &event);
@@ -115,6 +120,70 @@ impl Browser {
             }
             self.forward_to_page(event);
         }
+    }
+
+    /// The window has no system frame, so the OS offers no border to grab: resize from
+    /// a thin band along the window edges ourselves. Returns whether the event was used.
+    fn handle_resize_border(&mut self, event: &WindowEvent) -> bool {
+        let edge = if self.input.page_capture { None } else { self.resize_edge_at_cursor() };
+        match event {
+            WindowEvent::CursorMoved { .. } => {
+                if edge != self.input.resize_edge {
+                    self.input.resize_edge = edge;
+                    let cursor = match edge {
+                        Some(direction) => resize_cursor(direction),
+                        None if self.input.pointer_over_content => {
+                            winit_cursor(self.active_view().map_or(Cursor::Default, |view| view.cursor))
+                        },
+                        None => CursorIcon::Default,
+                    };
+                    self.window.set_cursor(cursor);
+                }
+                edge.is_some()
+            },
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                let Some(direction) = edge else {
+                    return false;
+                };
+                if let Err(error) = self.window.drag_resize_window(direction) {
+                    tracing::debug!(%error, "could not start resizing the window");
+                }
+                let window = &self.window;
+                if let Some(gui) = self.gui.as_mut() {
+                    gui.release_pointer(window);
+                }
+                true
+            },
+            _ => false,
+        }
+    }
+
+    fn resize_edge_at_cursor(&self) -> Option<ResizeDirection> {
+        if self.window_fullscreen || self.window.is_maximized() || !self.window.is_resizable() {
+            return None;
+        }
+        let position = self.input.cursor?;
+        let size = self.window.inner_size();
+        let border = (5.0 * self.window.scale_factor()).max(4.0);
+        let left = position.x < border;
+        let right = position.x >= f64::from(size.width) - border;
+        let top = position.y < border;
+        let bottom = position.y >= f64::from(size.height) - border;
+        Some(match (left, right, top, bottom) {
+            (true, _, true, _) => ResizeDirection::NorthWest,
+            (_, true, true, _) => ResizeDirection::NorthEast,
+            (true, _, _, true) => ResizeDirection::SouthWest,
+            (_, true, _, true) => ResizeDirection::SouthEast,
+            (true, ..) => ResizeDirection::West,
+            (_, true, ..) => ResizeDirection::East,
+            (_, _, true, _) => ResizeDirection::North,
+            (.., true) => ResizeDirection::South,
+            _ => return None,
+        })
     }
 
     fn route_to_page(&self, event: &WindowEvent) -> bool {
@@ -326,6 +395,15 @@ impl Browser {
             .shortcut(CMD_OR_CONTROL | Modifiers::SHIFT, 'Q', || Some(UiCommand::Quit))
             .otherwise(|| None)
             .flatten()
+    }
+}
+
+fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
+    match direction {
+        ResizeDirection::North | ResizeDirection::South => CursorIcon::NsResize,
+        ResizeDirection::East | ResizeDirection::West => CursorIcon::EwResize,
+        ResizeDirection::NorthEast | ResizeDirection::SouthWest => CursorIcon::NeswResize,
+        ResizeDirection::NorthWest | ResizeDirection::SouthEast => CursorIcon::NwseResize,
     }
 }
 

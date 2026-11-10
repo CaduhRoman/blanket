@@ -123,6 +123,13 @@ pub enum UiCommand {
     OmniboxInput(String),
     RefreshPerformance,
     FocusContent,
+    /// Window controls drawn in the tab strip (the window has no system title bar).
+    MinimizeWindow,
+    ToggleMaximizeWindow,
+    /// Start moving the window with the pointer (drag on empty title bar space).
+    DragWindow,
+    /// Show the system window menu at a point in the window (points).
+    WindowMenu(Pos2),
     Quit,
 }
 
@@ -154,6 +161,7 @@ pub struct UiModel<'a> {
     /// Content is in fullscreen: no chrome at all.
     pub chrome_hidden: bool,
     pub window_fullscreen: bool,
+    pub window_maximized: bool,
 }
 
 struct Texture(egui::TextureHandle);
@@ -249,6 +257,20 @@ impl Gui {
     /// An egui text field has keyboard focus.
     pub fn wants_keyboard(&self) -> bool {
         self.ctx().text_edit_focused()
+    }
+
+    /// The OS takes over the mouse during a window move or resize and swallows the
+    /// button release; tell egui the button is up so no widget stays pressed.
+    pub fn release_pointer(&mut self, window: &Window) {
+        // SAFETY: `dummy` is only unsafe because the id is not a real device; egui does
+        // not look at device ids.
+        let device_id = unsafe { winit::event::DeviceId::dummy() };
+        let event = winit::event::WindowEvent::MouseInput {
+            device_id,
+            state: winit::event::ElementState::Released,
+            button: winit::event::MouseButton::Left,
+        };
+        let _ = self.egui.on_window_event(window, &event);
     }
 
     pub fn surrender_focus(&mut self) {

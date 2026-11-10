@@ -17,7 +17,12 @@ use super::theme::{PILL, Palette};
 use super::widgets::{GlassState, ellipsize, glass_icon_button, glass_icon_button_sized, paint_glass, progress_bar};
 use super::{Disposition, Panel, Texture, UiCommand, UiModel, ZoomChange};
 
-const STRIP_HEIGHT: f32 = 40.0;
+const STRIP_HEIGHT: f32 = 42.0;
+const TAB_HEIGHT: f32 = 34.0;
+/// Width of each window control (minimize, maximize, close), as on Windows 11.
+const CAPTION_BUTTON_WIDTH: f32 = 46.0;
+/// Empty title bar always left for grabbing the window, however many tabs are open.
+const DRAG_RESERVE: f32 = 48.0;
 const NAV_HEIGHT: f32 = 48.0;
 const BOOKMARKS_HEIGHT: f32 = 32.0;
 const TAB_MAX_WIDTH: f32 = 224.0;
@@ -41,13 +46,8 @@ pub fn show(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
     let palette = *toolbar.palette;
     egui::Panel::top("tab-strip")
         .exact_size(STRIP_HEIGHT)
-        .frame(Frame::NONE.fill(palette.strip).inner_margin(Margin {
-            left: 8,
-            right: 8,
-            top: 6,
-            bottom: 0,
-        }))
-        .show_inside(ui, |ui| tab_strip(ui, toolbar));
+        .frame(Frame::NONE.fill(palette.strip))
+        .show_inside(ui, |ui| title_bar(ui, toolbar));
     egui::Panel::top("nav-bar")
         .exact_size(NAV_HEIGHT)
         .frame(Frame::NONE.fill(palette.chrome).inner_margin(Margin::symmetric(8, 0)))
@@ -64,6 +64,128 @@ pub fn show(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
     ui.painter().hline(width, line_y, Stroke::new(1.0, palette.separator));
 }
 
+// ----- title bar -------------------------------------------------------------------------
+
+/// The tab strip doubles as the window's title bar: tabs on the left, free space to
+/// move the window, and the window controls in the top right corner.
+fn title_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
+    let full = ui.max_rect();
+    let show_controls = !toolbar.model.window_fullscreen;
+    let controls_width = if show_controls { 3.0 * CAPTION_BUTTON_WIDTH } else { 0.0 };
+    let controls = Rect::from_min_max(pos2(full.max.x - controls_width, full.min.y), full.max);
+    let tabs_area = Rect::from_min_max(
+        pos2(full.min.x + 8.0, full.max.y - TAB_HEIGHT),
+        pos2((controls.min.x - DRAG_RESERVE).max(full.min.x + 8.0), full.max.y),
+    );
+    let tabs_end = tab_strip(ui, toolbar, tabs_area);
+
+    // Empty title bar: right of the tabs, and the band above them.
+    let after_tabs = Rect::from_min_max(pos2(tabs_end + 4.0, full.min.y), pos2(controls.min.x, full.max.y));
+    let above_tabs = Rect::from_min_max(full.min, pos2(tabs_end + 4.0, tabs_area.min.y));
+    for (index, rect) in [after_tabs, above_tabs].into_iter().enumerate() {
+        if !rect.is_positive() {
+            continue;
+        }
+        let response = ui.interact(rect, Id::new(("title-bar", index)), Sense::click_and_drag());
+        if response.double_clicked() {
+            toolbar.commands.push(UiCommand::ToggleMaximizeWindow);
+        } else if response.drag_started_by(egui::PointerButton::Primary) {
+            toolbar.commands.push(UiCommand::DragWindow);
+        }
+        if response.secondary_clicked() {
+            if let Some(point) = response.interact_pointer_pos() {
+                toolbar.commands.push(UiCommand::WindowMenu(point));
+            }
+        }
+    }
+
+    if show_controls {
+        caption_buttons(ui, toolbar, controls);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Caption {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+fn caption_buttons(ui: &mut Ui, toolbar: &mut Toolbar<'_>, area: Rect) {
+    let palette = *toolbar.palette;
+    let maximized = toolbar.model.window_maximized;
+    let buttons = [
+        (Caption::Minimize, "Minimize"),
+        if maximized { (Caption::Restore, "Restore") } else { (Caption::Maximize, "Maximize") },
+        (Caption::Close, "Close"),
+    ];
+    for (index, (caption, tooltip)) in buttons.into_iter().enumerate() {
+        let rect = Rect::from_min_size(
+            pos2(area.min.x + index as f32 * CAPTION_BUTTON_WIDTH, area.min.y),
+            vec2(CAPTION_BUTTON_WIDTH, area.height()),
+        );
+        let response = ui.interact(rect, Id::new(("caption", index)), Sense::click());
+        let hover = if response.hovered() { 1.0 } else { 0.0 };
+        let pressed = if response.is_pointer_button_down_on() { 1.0 } else { 0.0 };
+        paint_caption_button(ui.painter(), rect, caption, &palette, hover, pressed);
+        if response.on_hover_text_at_pointer(tooltip).clicked() {
+            toolbar.commands.push(match caption {
+                Caption::Minimize => UiCommand::MinimizeWindow,
+                Caption::Maximize | Caption::Restore => UiCommand::ToggleMaximizeWindow,
+                Caption::Close => UiCommand::Quit,
+            });
+        }
+    }
+}
+
+/// Window controls in the Windows 11 idiom: flat, full-height hit areas, hairline
+/// glyphs, and a red close button on hover.
+fn paint_caption_button(painter: &egui::Painter, rect: Rect, caption: Caption, palette: &Palette, hover: f32, pressed: f32) {
+    const CLOSE_RED: Color32 = Color32::from_rgb(0xc4, 0x2b, 0x1c);
+    let fill = if caption == Caption::Close {
+        CLOSE_RED.gamma_multiply((hover * (1.0 - 0.18 * pressed)).clamp(0.0, 1.0))
+    } else {
+        super::widgets::lerp_color(
+            super::widgets::lerp_color(Color32::TRANSPARENT, palette.glass_hover, hover),
+            palette.glass_pressed,
+            pressed,
+        )
+    };
+    if fill.a() > 0 {
+        painter.rect_filled(rect, CornerRadius::ZERO, fill);
+    }
+    let color = if caption == Caption::Close {
+        super::widgets::lerp_color(palette.text, Color32::WHITE, hover)
+    } else {
+        palette.text
+    };
+    let stroke = Stroke::new(1.0, color);
+    // Glyphs sit on a 10×10 box, aligned to the pixel grid for crisp hairlines.
+    let center = painter.round_pos_to_pixel_center(rect.center());
+    let half = 5.0;
+    match caption {
+        Caption::Minimize => {
+            painter.hline((center.x - half)..=(center.x + half), center.y, stroke);
+        },
+        Caption::Maximize => {
+            let square = Rect::from_center_size(center, Vec2::splat(2.0 * half));
+            painter.rect_stroke(square, CornerRadius::same(1), stroke, StrokeKind::Middle);
+        },
+        Caption::Restore => {
+            let back = Rect::from_min_size(pos2(center.x - half + 2.0, center.y - half), Vec2::splat(8.0));
+            let front = Rect::from_min_size(pos2(center.x - half, center.y - half + 2.0), Vec2::splat(8.0));
+            painter.line_segment([pos2(back.min.x, back.min.y), pos2(back.max.x, back.min.y)], stroke);
+            painter.line_segment([pos2(back.max.x, back.min.y), pos2(back.max.x, back.max.y)], stroke);
+            painter.rect_stroke(front, CornerRadius::same(1), stroke, StrokeKind::Middle);
+        },
+        Caption::Close => {
+            painter.line_segment([center + vec2(-half, -half), center + vec2(half, half)], stroke);
+            painter.line_segment([center + vec2(half, -half), center + vec2(-half, half)], stroke);
+        },
+    }
+}
+
 // ----- tab strip -------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -71,9 +193,10 @@ pub struct TabStrip {
     dragging: Option<TabId>,
 }
 
-fn tab_strip(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
+/// Lay out and draw the tabs and the new tab button inside `area`; returns the right edge
+/// of the last element so the rest of the strip can be used to move the window.
+fn tab_strip(ui: &mut Ui, toolbar: &mut Toolbar<'_>, area: Rect) -> f32 {
     let palette = *toolbar.palette;
-    let area = ui.max_rect();
     let tabs = toolbar.model.tabs.tabs();
     let active = toolbar.model.tabs.active_id();
     let new_tab_side = 30.0;
@@ -135,17 +258,22 @@ fn tab_strip(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
     }
 
     let plus_rect = Rect::from_min_size(
-        pos2((x + 4.0).min(area.max.x - new_tab_side), area.min.y + 2.0),
+        pos2((x + 4.0).min(area.max.x - new_tab_side), area.min.y + 1.0),
         Vec2::splat(new_tab_side),
     );
-    let response = ui
-        .scope_builder(egui::UiBuilder::new().max_rect(plus_rect), |ui| {
-            glass_icon_button_sized(ui, &palette, Icon::Plus, true, "New tab (Ctrl+T)", new_tab_side - 2.0, true)
-        })
-        .inner;
+    let response = glass_icon_button_sized(
+        &mut ui.new_child(egui::UiBuilder::new().max_rect(plus_rect)),
+        &palette,
+        Icon::Plus,
+        true,
+        "New tab (Ctrl+T)",
+        new_tab_side - 2.0,
+        true,
+    );
     if response.clicked() {
         toolbar.commands.push(UiCommand::NewTab);
     }
+    plus_rect.max.x
 }
 
 #[allow(clippy::too_many_arguments)]

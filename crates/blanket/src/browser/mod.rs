@@ -160,14 +160,21 @@ impl Browser {
             metrics,
         } = options;
 
-        let window = event_loop.create_window(
-            Window::default_attributes()
-                .with_title("Blanket")
-                .with_inner_size(INITIAL_WINDOW_SIZE)
-                .with_min_inner_size(MIN_WINDOW_SIZE)
-                .with_window_icon(window_icon())
-                .with_visible(false),
-        )?;
+        // No system title bar: the tab strip is the title bar, with its own window
+        // controls, like Chromium-based browsers. The title is still set for the taskbar.
+        let attributes = Window::default_attributes()
+            .with_title("Blanket")
+            .with_inner_size(INITIAL_WINDOW_SIZE)
+            .with_min_inner_size(MIN_WINDOW_SIZE)
+            .with_window_icon(window_icon())
+            .with_decorations(false)
+            .with_visible(false);
+        #[cfg(windows)]
+        let attributes = {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attributes.with_undecorated_shadow(true)
+        };
+        let window = event_loop.create_window(attributes)?;
         let display_handle = event_loop.display_handle()?;
         let window_handle = window.window_handle()?;
         let inner_size = non_zero(window.inner_size());
@@ -476,6 +483,7 @@ impl Browser {
             now_unix: unix_now(),
             chrome_hidden: *content_fullscreen,
             window_fullscreen: *window_fullscreen,
+            window_maximized: window.is_maximized(),
         };
         let active_webview = active_id.and_then(|id| views.get(&id)).map(|view| view.webview.clone());
         let mut paint_content = |size: PhysicalSize<u32>| -> bool {
@@ -642,6 +650,22 @@ impl Browser {
                 let mut config = self.config.clone();
                 config.ui.show_bookmarks_bar = !config.ui.show_bookmarks_bar;
                 self.apply_config(config);
+            },
+            UiCommand::MinimizeWindow => self.window.set_minimized(true),
+            UiCommand::ToggleMaximizeWindow => self.window.set_maximized(!self.window.is_maximized()),
+            UiCommand::DragWindow => {
+                if let Err(error) = self.window.drag_window() {
+                    debug!(%error, "could not start moving the window");
+                }
+                let window = &self.window;
+                if let Some(gui) = self.gui.as_mut() {
+                    gui.release_pointer(window);
+                }
+            },
+            UiCommand::WindowMenu(point) => {
+                let scale = self.window.scale_factor();
+                let position = winit::dpi::PhysicalPosition::new(f64::from(point.x) * scale, f64::from(point.y) * scale);
+                self.window.show_window_menu(position);
             },
             UiCommand::Quit => self.exit_requested = true,
         }
