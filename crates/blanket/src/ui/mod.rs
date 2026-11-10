@@ -297,6 +297,17 @@ impl Gui {
         self.dialogs.captures_input(self.active_tab)
     }
 
+    /// The content area (in points) as laid out in the last frame.
+    pub fn content_rect(&self) -> Rect {
+        self.content_rect
+    }
+
+    /// Chrome drawn over the content area right now (menu, address suggestions, a
+    /// dialog). Native compatibility views would hide it, so they step aside meanwhile.
+    pub fn covers_content(&self) -> bool {
+        self.location.overlay_open() || self.dialogs.captures_input(self.active_tab)
+    }
+
     pub fn content_origin(&self) -> Pos2 {
         if self.content_rect.is_positive() { self.content_rect.min } else { Pos2::ZERO }
     }

@@ -147,6 +147,7 @@ impl Browser {
                 self.request_redraw();
             },
             ServoEvent::Download { url, referrer } => self.start_download(url, referrer),
+            ServoEvent::CompatNavigation(url) => self.load_in_tab(id, url, false),
             ServoEvent::Opened(_) => unreachable!("handled by process_servo_events"),
         }
     }

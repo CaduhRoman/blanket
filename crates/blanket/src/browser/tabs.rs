@@ -18,6 +18,11 @@ use super::maintenance::Task;
 impl Browser {
     /// Create (or recreate) the web view for `id`, loading `url`. The view starts hidden.
     pub(super) fn create_view(&mut self, id: TabId, url: Url, user_initiated: bool) {
+        // Sites Servo cannot run yet open in compatibility mode, automatically.
+        if self.wants_compat(&url) && self.create_compat_view(id, &url) {
+            return;
+        }
+        self.compat.close(id);
         let Some(servo) = &self.servo else {
             return;
         };
@@ -81,6 +86,9 @@ impl Browser {
             view.webview.set_focused(true);
             self.window.set_cursor(super::input::winit_cursor(view.cursor));
         }
+        if self.compat.has_view(id) {
+            self.compat.focus(id);
+        }
         let url = self.tabs.get(id).and_then(|tab| tab.url.clone());
         self.gui_mut().on_tab_switched(url.as_ref());
         self.session_dirty = true;
@@ -93,7 +101,7 @@ impl Browser {
             return;
         };
         let needs_view = match &tab.lifecycle {
-            TabLifecycle::Live => !self.views.contains_key(&id),
+            TabLifecycle::Live => !self.views.contains_key(&id) && !self.compat.has_view(id),
             TabLifecycle::Suspended { .. } => true,
             TabLifecycle::Crashed { .. } => false,
         };
@@ -156,6 +164,8 @@ impl Browser {
     /// Release the engine resources of a tab. Dropping the last `WebView` handle closes
     /// it in Servo's constellation.
     pub(super) fn drop_view(&mut self, id: TabId) {
+        self.compat.close(id);
+        self.compat_typed.remove(&id);
         if let Some(view) = self.views.remove(&id) {
             let webview_id = view.webview.id();
             self.by_webview.remove(&webview_id);

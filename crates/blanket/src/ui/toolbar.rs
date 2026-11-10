@@ -605,6 +605,11 @@ impl LocationBar {
         }
     }
 
+    /// The main menu or the suggestions popup is showing.
+    pub fn overlay_open(&self) -> bool {
+        self.menu_open || self.popup_rect.is_some()
+    }
+
     pub fn request_focus(&mut self) {
         self.focus_requested = true;
         self.select_all = true;

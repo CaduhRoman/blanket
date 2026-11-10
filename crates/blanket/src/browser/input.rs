@@ -98,6 +98,10 @@ impl Browser {
         if let WindowEvent::CursorMoved { position, .. } = &event {
             self.input.cursor = Some(*position);
         }
+        // A click on the chrome takes keyboard focus back from a compatibility page.
+        if matches!(event, WindowEvent::MouseInput { state: ElementState::Pressed, .. }) {
+            self.compat.release_focus();
+        }
         if self.handle_resize_border(&event) {
             return;
         }

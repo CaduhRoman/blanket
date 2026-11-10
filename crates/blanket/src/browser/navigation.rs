@@ -40,6 +40,8 @@ impl Browser {
     fn mark_typed(&mut self, id: TabId, typed: bool) {
         if let Some(view) = self.views.get_mut(&id) {
             view.typed = typed;
+        } else if typed && self.compat.has_view(id) {
+            self.compat_typed.insert(id);
         }
     }
 
@@ -50,6 +52,23 @@ impl Browser {
         }
         if let Some(tab) = self.tabs.get_mut(id) {
             tab.url = Some(url.clone());
+        }
+        // The engine is chosen per URL: stay in the current one, or move the tab across.
+        let wants_compat = self.wants_compat(&url);
+        if wants_compat && self.compat.has_view(id) {
+            self.compat.navigate(id, &url);
+            self.mark_typed(id, typed);
+            self.request_redraw();
+            return;
+        }
+        if wants_compat || self.compat.has_view(id) {
+            self.create_view(id, url, true);
+            self.mark_typed(id, typed);
+            if Some(id) == self.tabs.active_id() {
+                self.show_active(None, id);
+            }
+            self.request_redraw();
+            return;
         }
         match self.views.get_mut(&id) {
             Some(view) => {
@@ -72,6 +91,10 @@ impl Browser {
         let Some(id) = self.tabs.active_id() else {
             return;
         };
+        if self.compat.has_view(id) {
+            self.compat.go_back(id);
+            return;
+        }
         let Some(view) = self.views.get_mut(&id) else {
             return;
         };
@@ -85,6 +108,10 @@ impl Browser {
     }
 
     pub(super) fn go_forward(&mut self) {
+        if let Some(id) = self.tabs.active_id().filter(|id| self.compat.has_view(*id)) {
+            self.compat.go_forward(id);
+            return;
+        }
         if let Some(view) = self.active_view() {
             if view.webview.can_go_forward() {
                 view.webview.go_forward(1);
@@ -106,7 +133,9 @@ impl Browser {
             self.show_active(None, id);
             return;
         }
-        if let Some(view) = self.views.get(&id) {
+        if self.compat.has_view(id) {
+            self.compat.reload(id);
+        } else if let Some(view) = self.views.get(&id) {
             view.webview.reload();
         } else {
             self.ensure_live(id);

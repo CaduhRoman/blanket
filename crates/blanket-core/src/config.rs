@@ -22,6 +22,61 @@ pub struct BlanketConfig {
     pub security: SecurityConfig,
     pub preload: PreloadConfig,
     pub ui: UiConfig,
+    pub compat: CompatConfig,
+}
+
+/// Compatibility mode: sites that need features Servo does not have yet (Media Source
+/// Extensions, DRM — YouTube, Twitch, streaming services) open in a system WebView2 tab
+/// instead, automatically. Everything else stays on Servo.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompatConfig {
+    pub enabled: bool,
+    /// Registrable domains; subdomains match too ("youtube.com" covers "m.youtube.com").
+    pub domains: Vec<String>,
+}
+
+pub const DEFAULT_COMPAT_DOMAINS: &[&str] = &[
+    "youtube.com",
+    "youtu.be",
+    "youtube-nocookie.com",
+    "twitch.tv",
+    "kick.com",
+    "netflix.com",
+    "primevideo.com",
+    "disneyplus.com",
+    "max.com",
+    "globoplay.globo.com",
+    "crunchyroll.com",
+    "vimeo.com",
+    "open.spotify.com",
+    "tiktok.com",
+];
+
+impl Default for CompatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            domains: DEFAULT_COMPAT_DOMAINS.iter().map(|domain| (*domain).to_owned()).collect(),
+        }
+    }
+}
+
+impl CompatConfig {
+    /// Whether `url` should open in compatibility mode.
+    pub fn applies_to(&self, url: &url::Url) -> bool {
+        if !self.enabled || !matches!(url.scheme(), "http" | "https") {
+            return false;
+        }
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        self.domains.iter().any(|domain| {
+            let domain = domain.trim().trim_start_matches("*.").trim_end_matches('.').to_ascii_lowercase();
+            !domain.is_empty() && (host == domain || host.ends_with(&format!(".{domain}")))
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -284,6 +339,27 @@ impl BlanketConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compat_mode_matches_domains_and_subdomains() {
+        let url = |text: &str| url::Url::parse(text).unwrap();
+        let mut compat = CompatConfig::default();
+        assert!(compat.applies_to(&url("https://www.youtube.com/watch?v=x")));
+        assert!(compat.applies_to(&url("https://m.youtube.com/")));
+        assert!(compat.applies_to(&url("https://YouTu.be/x")));
+        assert!(compat.applies_to(&url("https://www.twitch.tv/")));
+        assert!(!compat.applies_to(&url("https://notyoutube.com/")));
+        assert!(!compat.applies_to(&url("https://servo.org/")));
+        assert!(!compat.applies_to(&url("blanket:newtab")));
+        compat.enabled = false;
+        assert!(!compat.applies_to(&url("https://www.youtube.com/")));
+    }
+
+    #[test]
+    fn old_config_files_get_compat_defaults() {
+        let config: BlanketConfig = toml::from_str("[ui]\ntheme = \"dark\"\n").unwrap();
+        assert_eq!(config.compat, CompatConfig::default());
+    }
 
     #[test]
     fn default_config_round_trips_through_toml() {

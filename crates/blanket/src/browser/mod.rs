@@ -1,6 +1,12 @@
 //! Browser Core: owns the Servo instance, the window, the tabs and every manager, and
 //! connects them. Split by concern into submodules.
 
+#[cfg(windows)]
+mod compat;
+#[cfg(not(windows))]
+#[path = "compat_stub.rs"]
+mod compat;
+mod compat_tabs;
 mod delegate;
 mod downloads;
 mod input;
@@ -123,6 +129,10 @@ pub struct Browser {
     downloads: DownloadList,
     permissions: PermissionStore,
     net: NetService,
+    /// Compatibility-mode tabs (WebView2) for sites Servo cannot run yet.
+    compat: compat::CompatHost,
+    /// Compatibility tabs whose current navigation was typed by the user.
+    compat_typed: HashSet<TabId>,
     newtab: NewTabData,
 
     waker: Waker,
@@ -214,6 +224,11 @@ impl Browser {
         let delegate = Delegate::new();
         let scale = Scale::new(window.scale_factor() as f32);
         delegate.set_creation_context(offscreen.clone(), scale);
+        let compat = compat::CompatHost::for_window(&window, paths.root(), config.compat.clone(), {
+            let waker = waker.clone();
+            Rc::new(move || waker.wake())
+        });
+        delegate.set_compat(compat.is_available().then(|| config.compat.clone()));
 
         let history: History = load_or_default("history", History::load(&paths.history()));
         let bookmarks: Bookmarks = load_or_default("bookmarks", Bookmarks::load(&paths.bookmarks()));
@@ -245,6 +260,8 @@ impl Browser {
             window_context,
             window,
             net: NetService::new(waker.as_net_waker()),
+            compat,
+            compat_typed: HashSet::new(),
             newtab,
             waker,
             pacer: FramePacer::new(Duration::from_millis(config.scheduler.animation_frame_interval_ms)),
@@ -393,6 +410,7 @@ impl Browser {
             servo.spin_event_loop();
         }
         self.process_servo_events();
+        self.process_compat_events();
         self.drain_async_results();
         self.process_download_events();
         self.poll_file_dialogs();
@@ -437,6 +455,7 @@ impl Browser {
         let now = Instant::now();
         let active_id = self.tabs.active_id();
         let active_view = active_id.and_then(|id| self.views.get(&id));
+        let active_compat = active_id.filter(|id| self.compat.has_view(*id));
         let active_tab = self.tabs.active();
         let url = active_tab.and_then(|tab| tab.url.clone());
         let active = ActiveView {
@@ -445,9 +464,18 @@ impl Browser {
             bookmarked: url.as_ref().is_some_and(|url| self.bookmarks.contains(url)),
             url,
             loading: active_tab.is_some_and(|tab| tab.loading),
-            can_go_back: active_view.is_some_and(LiveView::can_go_back),
-            can_go_forward: active_view.is_some_and(|view| view.webview.can_go_forward()),
-            zoom: active_view.map_or(1.0, |view| view.webview.page_zoom()),
+            can_go_back: match active_compat {
+                Some(id) => self.compat.can_go_back(id),
+                None => active_view.is_some_and(LiveView::can_go_back),
+            },
+            can_go_forward: match active_compat {
+                Some(id) => self.compat.can_go_forward(id),
+                None => active_view.is_some_and(|view| view.webview.can_go_forward()),
+            },
+            zoom: match active_compat {
+                Some(id) => self.compat.zoom(id).unwrap_or(1.0),
+                None => active_view.map_or(1.0, |view| view.webview.page_zoom()),
+            },
             status_text: active_view.and_then(|view| view.status_text.clone()),
             has_painted_view: active_view.is_some_and(|view| view.painted),
             crashed: active_tab.and_then(|tab| match &tab.lifecycle {
@@ -469,6 +497,7 @@ impl Browser {
             permissions,
             content_fullscreen,
             window_fullscreen,
+            compat,
             ..
         } = self;
         let Some(gui) = gui.as_mut() else {
@@ -502,6 +531,11 @@ impl Browser {
         };
         let commands = gui.update(window, &model, &mut paint_content);
         gui.paint(window);
+        // A compatibility tab is a native window over the content area: keep it there,
+        // and out of the way while chrome popups (menu, suggestions, dialogs) cover it.
+        let inset_edges = !window.is_maximized() && !*window_fullscreen;
+        let bounds = active_compat.and_then(|_| compat_bounds(gui, window, inset_edges));
+        compat.layout(active_id, bounds);
         self.ui_animating = gui.needs_repaint();
         self.pacer.frame_presented(Instant::now());
 
@@ -645,6 +679,8 @@ impl Browser {
             UiCommand::FocusContent => {
                 if let Some(view) = self.active_view() {
                     view.webview.set_focused(true);
+                } else if let Some(id) = self.tabs.active_id() {
+                    self.compat.focus(id);
                 }
             },
             UiCommand::FocusLocation => self.gui_mut().focus_location(),
@@ -707,16 +743,20 @@ impl Browser {
     }
 
     fn zoom(&mut self, change: crate::ui::ZoomChange) {
-        let Some(view) = self.active_view() else {
-            return;
-        };
-        let current = view.webview.page_zoom();
-        let zoom = match change {
+        let next = |current: f32| match change {
             crate::ui::ZoomChange::In => (current * 1.1).min(5.0),
             crate::ui::ZoomChange::Out => (current / 1.1).max(0.25),
             crate::ui::ZoomChange::Reset => 1.0,
         };
-        view.webview.set_page_zoom(zoom);
+        if let Some(id) = self.tabs.active_id().filter(|id| self.compat.has_view(*id)) {
+            let current = self.compat.zoom(id).unwrap_or(1.0);
+            self.compat.set_zoom(id, next(current));
+            return;
+        }
+        let Some(view) = self.active_view() else {
+            return;
+        };
+        view.webview.set_page_zoom(next(view.webview.page_zoom()));
     }
 
     fn set_window_fullscreen(&mut self, fullscreen: bool) {
@@ -752,6 +792,8 @@ impl Browser {
             Duration::from_secs(config.memory.sample_interval_secs),
             blanket_core::scheduler::TaskPriority::Background,
         );
+        self.compat.set_config(config.compat.clone());
+        self.delegate.set_compat(self.compat.is_available().then(|| config.compat.clone()));
         self.config = config;
         let system_theme = self.window.theme();
         let theme = crate::ui::theme::resolve_theme(self.config.ui.theme, system_theme);
@@ -826,6 +868,7 @@ impl Browser {
         }
         self.save_all_state();
 
+        self.compat.close_all();
         self.views.clear();
         self.by_webview.clear();
         if let Some(gui) = self.gui.take() {
@@ -858,6 +901,32 @@ fn load_or_default<T: Default>(what: &str, result: Result<T, blanket_core::CoreE
 /// Rendering contexts cannot be created with a zero-sized surface (minimized window).
 fn non_zero(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
+}
+
+/// Where a compatibility view goes, in physical pixels: the content area, unless a chrome
+/// popup covers it. With `inset_edges`, the window's resize band stays uncovered.
+fn compat_bounds(gui: &Gui, window: &Window, inset_edges: bool) -> Option<(i32, i32, i32, i32)> {
+    if gui.covers_content() {
+        return None;
+    }
+    let rect = gui.content_rect();
+    if !rect.is_positive() {
+        return None;
+    }
+    let scale = window.scale_factor() as f32;
+    let size = window.inner_size();
+    let (width, height) = (size.width as i32, size.height as i32);
+    let mut left = (rect.min.x * scale).round() as i32;
+    let top = (rect.min.y * scale).round() as i32;
+    let mut right = (rect.max.x * scale).round() as i32;
+    let mut bottom = (rect.max.y * scale).round() as i32;
+    if inset_edges {
+        let band = (5.0 * scale).ceil() as i32;
+        left = left.max(band);
+        right = right.min(width - band);
+        bottom = bottom.min(height - band);
+    }
+    (right > left && bottom > top).then_some((left, top, right, bottom))
 }
 
 fn window_icon() -> Option<Icon> {

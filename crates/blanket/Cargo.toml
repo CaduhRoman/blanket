@@ -62,5 +62,10 @@ servo = { version = "=0.8.0", default-features = false, features = ["no-wgl"] }
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
+[target.'cfg(windows)'.dependencies]
+# Compatibility mode (sites that need MSE/DRM) runs on the system WebView2 runtime.
+webview2-com = "0.39.1"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }

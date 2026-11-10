@@ -45,6 +45,8 @@ pub enum ServoEvent {
     HideControl(EmbedderControlId),
     /// A main-frame navigation was intercepted because it is a file download.
     Download { url: Url, referrer: Option<Url> },
+    /// A page navigated to a site that needs compatibility mode.
+    CompatNavigation(Url),
 }
 
 /// What the delegate needs to create web views for `window.open`.
@@ -61,6 +63,8 @@ pub struct Delegate {
     creation: RefCell<Option<CreationContext>>,
     screen: RefCell<Option<ScreenGeometry>>,
     intercept_downloads: Cell<bool>,
+    /// Compatibility-mode rules, when the WebView2 runtime is available.
+    compat: RefCell<Option<blanket_core::config::CompatConfig>>,
     this: Weak<Delegate>,
 }
 
@@ -72,6 +76,7 @@ impl Delegate {
             creation: RefCell::default(),
             screen: RefCell::default(),
             intercept_downloads: Cell::new(true),
+            compat: RefCell::default(),
             this: this.clone(),
         })
     }
@@ -88,6 +93,10 @@ impl Delegate {
         if let Some(creation) = self.creation.borrow_mut().as_mut() {
             creation.scale = scale;
         }
+    }
+
+    pub fn set_compat(&self, compat: Option<blanket_core::config::CompatConfig>) {
+        *self.compat.borrow_mut() = compat;
     }
 
     pub fn set_screen_geometry(&self, geometry: ScreenGeometry) {
@@ -177,6 +186,13 @@ impl WebViewDelegate for Delegate {
         let expected = self.user_navigations.borrow_mut().remove(&webview.id());
         if expected.as_ref() == Some(&navigation_request.url) {
             navigation_request.allow();
+            return;
+        }
+        // Links into sites that need compatibility mode continue there, in the same tab.
+        if self.compat.borrow().as_ref().is_some_and(|compat| compat.applies_to(&navigation_request.url)) {
+            let url = navigation_request.url.clone();
+            navigation_request.deny();
+            self.push(&webview, ServoEvent::CompatNavigation(url));
             return;
         }
         let current = webview.url();
