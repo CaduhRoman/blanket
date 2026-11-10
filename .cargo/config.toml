@@ -1,0 +1,20 @@
+# Build environment required by the `servo` crate. These values mirror Servo's own
+# `.cargo/config.toml` (servo v0.8.0) because Cargo does not propagate a dependency's
+# config to the embedder.
+
+[target.x86_64-pc-windows-msvc]
+linker = "lld-link.exe"
+
+[target.aarch64-pc-windows-msvc]
+linker = "lld-link.exe"
+
+[env]
+# A few Servo crates (script, mozjs, ...) use unstable features gated per crate.
+RUSTC_BOOTSTRAP = "crown,script,script_webcrypto,script_webgpu,script_bindings,style_tests,mozjs,mozjs_sys"
+SERVO_STYLE_THREAD_STACK_SIZE_KB = "8192"
+MACOSX_DEPLOYMENT_TARGET = "13.0"
+# mozjs is built with clang-cl on Windows; all C/C++ in the graph must use the same compiler.
+CC_x86_64_pc_windows_msvc = "clang-cl.exe"
+CXX_x86_64_pc_windows_msvc = "clang-cl.exe"
+CC_aarch64_pc_windows_msvc = "clang-cl.exe"
+CXX_aarch64_pc_windows_msvc = "clang-cl.exe"

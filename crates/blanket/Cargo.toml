@@ -1,0 +1,66 @@
+[package]
+name = "blanket"
+description = "Blanket: a lightweight desktop web browser built on the Servo engine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "blanket"
+path = "src/main.rs"
+
+[features]
+default = ["webgl"]
+# Audio/video playback through GStreamer. Requires the GStreamer MSVC runtime and
+# development packages (see docs/BUILDING.md).
+media = ["servo/media-gstreamer"]
+webgl = ["servo/webgl"]
+# Servo's remote developer tools server.
+devtools = ["servo/devtools"]
+
+[dependencies]
+blanket-core = { workspace = true }
+blanket-net = { workspace = true }
+
+servo = { version = "=0.8.0", default-features = false, features = [
+    "bundled",
+    "clipboard",
+    "js_jit",
+    "subtlecrypto",
+] }
+winit = "0.30.13"
+egui = "0.34.3"
+egui-winit = { version = "0.34.3", default-features = false, features = ["clipboard", "links"] }
+egui_glow = { version = "0.34.3", features = ["winit"] }
+glow = "0.17"
+euclid = "0.22"
+dpi = "0.1"
+keyboard-types = "0.8.3"
+raw-window-handle = "0.6"
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+headers = "0.4"
+http = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+rfd = "0.17.2"
+url = { workspace = true }
+thiserror = { workspace = true }
+log = "0.4"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Servoshell uses ANGLE (EGL over Direct3D) instead of WGL on Windows; we do the same.
+servo = { version = "=0.8.0", default-features = false, features = ["no-wgl"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+tempfile = { workspace = true }

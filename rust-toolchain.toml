@@ -1,0 +1,5 @@
+[toolchain]
+# Same toolchain Servo v0.8.0 is developed and tested with.
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-pc-windows-msvc"]

@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/blanket-core",
+    "crates/blanket-net",
+    "crates/blanket",
+    "crates/blanket-bench",
+]
+default-members = ["crates/blanket-core", "crates/blanket-net", "crates/blanket-bench"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+authors = ["Carlos"]
+repository = "https://github.com/caduhroman/blanket"
+rust-version = "1.88"
+
+[workspace.dependencies]
+blanket-core = { path = "crates/blanket-core" }
+blanket-net = { path = "crates/blanket-net" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+url = { version = "2.5", features = ["serde"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+dirs = "7"
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "fs", "io-util", "sync", "time", "macros"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "stream", "charset", "system-proxy"] }
+futures-util = { version = "0.3", default-features = false }
+crossbeam-channel = "0.5"
+clap = { version = "4.6", features = ["derive"] }
+tempfile = "3"
+
+[profile.dev]
+# Servo is unusably slow without optimizations; optimize dependencies even in dev builds
+# while keeping our own crates quick to rebuild.
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.release]
+opt-level = 3
+# LTO over all of Servo needs far more than 8 GB of RAM to link; it can be enabled for
+# distribution builds on bigger machines with `--config profile.release.lto="thin"`.
+lto = false
+codegen-units = 16
+debug = "line-tables-only"
+strip = "debuginfo"
+panic = "unwind"
+
+# Used by benchmarks: same as release but with symbols for profiling.
+[profile.profiling]
+inherits = "release"
+debug = "limited"
+strip = "none"

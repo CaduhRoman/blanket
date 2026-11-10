@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>New Tab</title>
+<style>
+  :root {
+    --bg: #0e1014;
+    --card: #16181c;
+    --text: #f4f5f7;
+    --dim: #9aa0a8;
+    --faint: #6b727b;
+    --glass: rgba(255, 255, 255, 0.07);
+    --glass-hover: rgba(255, 255, 255, 0.12);
+    --stroke: rgba(255, 255, 255, 0.12);
+    --edge: rgba(255, 255, 255, 0.22);
+    --accent: #3dd68c;
+    --accent-text: #061a10;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #e8eaee;
+      --card: #f6f7f9;
+      --text: #1a1c1f;
+      --dim: #555b63;
+      --faint: #8d939b;
+      --glass: rgba(0, 0, 0, 0.045);
+      --glass-hover: rgba(0, 0, 0, 0.08);
+      --stroke: rgba(0, 0, 0, 0.10);
+      --edge: rgba(255, 255, 255, 0.85);
+      --accent: #0f9d63;
+      --accent-text: #fff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px 20px;
+  }
+  main {
+    width: min(880px, 100%);
+    background: var(--card);
+    border: 1px solid var(--stroke);
+    border-radius: 28px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 26px 32px 18px;
+  }
+  .wordmark {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -0.7px;
+    line-height: 1;
+  }
+  .pill {
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 650;
+    font-size: 13px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    line-height: 1;
+  }
+  .hero {
+    position: relative;
+    margin: 0 18px;
+    border-radius: 18px;
+    overflow: hidden;
+    aspect-ratio: 16 / 7.2;
+    background: #050608;
+  }
+  .hero img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .copy {
+    text-align: center;
+    padding: 28px 32px 0;
+  }
+  h1 {
+    margin: 0;
+    font-size: 34px;
+    font-weight: 650;
+    letter-spacing: -0.6px;
+  }
+  .tagline {
+    margin: 8px 0 0;
+    color: var(--dim);
+    font-size: 16px;
+  }
+  form {
+    margin: 22px 32px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--glass);
+    border: 1px solid var(--stroke);
+    border-top-color: var(--edge);
+    border-radius: 999px;
+    padding: 5px 5px 5px 20px;
+  }
+  form:focus-within { border-color: var(--accent); }
+  input[type=search] {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    outline: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
+    padding: 8px 0;
+  }
+  button {
+    border: 1px solid var(--stroke);
+    border-top-color: var(--edge);
+    background: var(--glass);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    padding: 8px 18px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  button:hover { background: var(--glass-hover); }
+  .sites:empty { display: none; }
+  .sites {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+    gap: 10px;
+    padding: 20px 32px 0;
+  }
+  .site {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 8px 12px;
+    border-radius: 16px;
+    background: var(--glass);
+    border: 1px solid var(--stroke);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 12.5px;
+    overflow: hidden;
+  }
+  .site:hover { background: var(--glass-hover); }
+  .badge {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 650;
+    color: #fff;
+  }
+  .site span { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  footer {
+    margin: 24px 32px 0;
+    padding: 18px 0 22px;
+    border-top: 1px solid var(--stroke);
+    text-align: center;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  footer small {
+    display: block;
+    margin-top: 4px;
+    color: var(--faint);
+    font-weight: 400;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="wordmark">blanket</span>
+    <span class="pill">Browser</span>
+  </header>
+  <div class="hero">
+    <img src="blanket:silk" alt="" width="1600" height="720">
+  </div>
+  <div class="copy">
+    <h1>Browse without limits.</h1>
+    <p class="tagline">Lightweight by design. Powerful by nature.</p>
+  </div>
+  <form action="{{SEARCH_ACTION}}" method="get" role="search">
+    <input type="search" name="{{QUERY_NAME}}" placeholder="Search with {{ENGINE_NAME}}" autocomplete="off" autofocus>
+    {{SEARCH_FIELDS}}
+    <button type="submit">Search</button>
+  </form>
+  <nav class="sites">{{TOP_SITES}}</nav>
+  <footer>
+    Built with Rust. Powered by Servo.
+    <small>Blanket {{VERSION}}</small>
+  </footer>
+</main>
+</body>
+</html>
