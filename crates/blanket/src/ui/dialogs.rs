@@ -270,7 +270,7 @@ fn context_extras(info: &servo::ContextMenuElementInformation) -> Vec<ContextExt
             label: "Open link in new tab".into(),
             command: UiCommand::OpenUrl {
                 url: url.clone(),
-                disposition: super::Disposition::NewTab,
+                disposition: super::Disposition::BackgroundTab,
             },
         });
         extras.push(ContextExtra {
@@ -286,7 +286,7 @@ fn context_extras(info: &servo::ContextMenuElementInformation) -> Vec<ContextExt
             label: "Open image in new tab".into(),
             command: UiCommand::OpenUrl {
                 url: url.clone(),
-                disposition: super::Disposition::NewTab,
+                disposition: super::Disposition::BackgroundTab,
             },
         });
         extras.push(ContextExtra {

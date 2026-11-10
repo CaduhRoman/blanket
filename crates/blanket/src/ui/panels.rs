@@ -279,7 +279,7 @@ fn bookmarks(ui: &mut Ui, palette: &Palette, model: &UiModel<'_>, state: &mut Pa
                 if ui.button("Open in new tab").clicked() {
                     commands.push(UiCommand::OpenUrl {
                         url: bookmark.url.clone(),
-                        disposition: Disposition::NewTab,
+                        disposition: Disposition::BackgroundTab,
                     });
                     ui.close();
                 }
