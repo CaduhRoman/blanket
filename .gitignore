@@ -3,3 +3,4 @@
 !/bench-results/.gitkeep
 *.log
 /target-core
+/dist
