@@ -30,6 +30,18 @@ pub struct PanelState {
     rename: Option<(Url, String)>,
     clear: ClearDataRequest,
     pub settings_draft: Option<BlanketConfig>,
+    /// Site being typed into the compatibility list.
+    compat_new: String,
+}
+
+/// "https://www.Example.com/path" → "example.com": what the compatibility list stores.
+fn normalize_domain(input: &str) -> String {
+    let text = input.trim().to_ascii_lowercase();
+    let text = text.split_once("://").map_or(text.as_str(), |(_, rest)| rest);
+    let host = text.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    let host = host.split(':').next().unwrap_or_default();
+    host.trim_start_matches("www.").trim_matches('.').to_owned()
 }
 
 impl Default for PanelState {
@@ -46,6 +58,7 @@ impl Default for PanelState {
                 permissions: false,
             },
             settings_draft: None,
+            compat_new: String::new(),
         }
     }
 }
@@ -378,7 +391,12 @@ fn section(ui: &mut Ui, title: &str) {
 }
 
 fn settings(ui: &mut Ui, palette: &Palette, model: &UiModel<'_>, state: &mut PanelState, commands: &mut Vec<UiCommand>) {
-    let draft = state.settings_draft.get_or_insert_with(|| model.config.clone());
+    let PanelState {
+        settings_draft,
+        compat_new,
+        ..
+    } = state;
+    let draft = settings_draft.get_or_insert_with(|| model.config.clone());
     let changed = *draft != *model.config;
     ScrollArea::vertical()
         .max_height(ui.available_height() - 48.0)
@@ -422,6 +440,52 @@ fn settings(ui: &mut Ui, palette: &Palette, model: &UiModel<'_>, state: &mut Pan
                         .desired_width(f32::INFINITY),
                 );
             }
+
+            section(ui, "Compatibility mode");
+            ui.checkbox(&mut draft.compat.enabled, "Open sites that need it in compatibility mode");
+            ui.label(
+                RichText::new(
+                    "Video and streaming sites (YouTube, Twitch, Netflix…) use web features Servo does not support yet. \
+                     These sites open automatically on the Microsoft Edge WebView2 engine; every other site stays on \
+                     Servo. Sign-ins on these sites are kept separately from Servo tabs.",
+                )
+                .small()
+                .color(palette.text_faint),
+            );
+            ui.add_enabled_ui(draft.compat.enabled, |ui| {
+                let mut remove = None;
+                for (index, domain) in draft.compat.domains.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(domain).small());
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.small_button("Remove").clicked() {
+                                remove = Some(index);
+                            }
+                        });
+                    });
+                }
+                if let Some(index) = remove {
+                    draft.compat.domains.remove(index);
+                }
+                ui.horizontal(|ui| {
+                    let field = ui.add(
+                        egui::TextEdit::singleline(compat_new)
+                            .hint_text("Add a site, e.g. example.com")
+                            .desired_width(ui.available_width() - 60.0),
+                    );
+                    let submitted = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    if ui.small_button("Add").clicked() || submitted {
+                        let domain = normalize_domain(&compat_new);
+                        if !domain.is_empty() && !draft.compat.domains.contains(&domain) {
+                            draft.compat.domains.push(domain);
+                        }
+                        compat_new.clear();
+                    }
+                });
+                if ui.small_button("Reset list").clicked() {
+                    draft.compat.domains = blanket_core::config::CompatConfig::default().domains;
+                }
+            });
 
             section(ui, "Memory");
             ui.checkbox(&mut draft.memory.suspension_enabled, "Put inactive tabs to sleep");
@@ -623,4 +687,17 @@ fn performance(ui: &mut Ui, palette: &Palette, model: &UiModel<'_>, commands: &m
             .color(palette.text_faint),
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_domain;
+
+    #[test]
+    fn compat_domains_are_normalized() {
+        assert_eq!(normalize_domain("  https://www.Example.com/path?q=1 "), "example.com");
+        assert_eq!(normalize_domain("music.youtube.com:443"), "music.youtube.com");
+        assert_eq!(normalize_domain("twitch.tv"), "twitch.tv");
+        assert_eq!(normalize_domain("   "), "");
+    }
 }
