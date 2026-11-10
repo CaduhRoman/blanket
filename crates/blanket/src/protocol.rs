@@ -147,7 +147,7 @@ fn render_newtab(search: &SearchEngine, top_sites: &[TopSite]) -> String {
     }
     let mut sites = String::new();
     for site in top_sites {
-        let label = if site.title.trim().is_empty() {
+        let label = if site.title.trim().is_empty() || is_error_title(&site.title) {
             site.url.host_str().unwrap_or(site.url.as_str()).to_owned()
         } else {
             site.title.clone()
@@ -169,6 +169,12 @@ fn render_newtab(search: &SearchEngine, top_sites: &[TopSite]) -> String {
         .replace("{{SEARCH_FIELDS}}", &fields)
         .replace("{{TOP_SITES}}", &sites)
         .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+}
+
+/// Titles of the engine's error pages, which say nothing about the site; a failed
+/// visit should not label its tile.
+fn is_error_title(title: &str) -> bool {
+    matches!(title.trim(), "Error loading page" | "Page not found" | "Problem loading page")
 }
 
 /// A stable, muted color per host for the site badge.
@@ -225,5 +231,16 @@ mod tests {
         assert!(!html.contains("<script>alert(1)"));
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("\"><x>"));
+    }
+
+    #[test]
+    fn error_page_titles_fall_back_to_host() {
+        let sites = vec![TopSite {
+            title: "Error loading page".into(),
+            url: Url::parse("https://www.youtube.com/").unwrap(),
+        }];
+        let html = render_newtab(&SearchEngine::default(), &sites);
+        assert!(html.contains("<span>www.youtube.com</span>"));
+        assert!(!html.contains("Error loading page"));
     }
 }
