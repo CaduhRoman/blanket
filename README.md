@@ -60,6 +60,8 @@ O harness mede Blanket, e Chrome/Firefox se estiverem instalados, nas mesmas URL
 
 A UI nunca fala com o motor: recebe um `UiModel` e devolve `UiCommand`. O conteúdo web é o framebuffer offscreen do Servo, copiado para a área central.
 
+`third_party/` guarda cópias de crates do Servo com correções que a API de embedder não alcança (por exemplo, o limite de cabeçalhos HTTP/2 que impedia o YouTube de carregar). Ver [`third_party/README.md`](third_party/README.md).
+
 ## Identidade
 
-Chrome escuro, controlos em vidro (material translúcido no espírito do iOS), um único verde `#3dd68c`, wordmark **blanket**. A new tab usa a ilustração de seda do projeto.
+Chrome escuro, controlos em vidro (material translúcido no espírito do iOS), um único verde `#3dd68c`, wordmark **blanket**. As abas ocupam a barra de título, com os controlos da janela no canto superior direito, como no Chrome. Transições suaves em abas, botões, menus e painéis. A new tab usa a ilustração de seda líquida do projeto como fundo de ecrã inteiro.
