@@ -320,8 +320,16 @@ fn nav_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
     let palette = *toolbar.palette;
     let active = &toolbar.model.active;
     let bar = ui.max_rect();
-    ui.horizontal_centered(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+    // The trailing buttons get fixed slots first; the address bar takes what is left, so
+    // nothing can overlap however wide the window is.
+    const BUTTON: f32 = 32.0;
+    const GAP: f32 = 6.0;
+    let menu_slot = Rect::from_center_size(pos2(bar.max.x - BUTTON / 2.0, bar.center().y), Vec2::splat(BUTTON));
+    let downloads_slot = menu_slot.translate(vec2(-(BUTTON + GAP), 0.0));
+    let mut leading = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    {
+        let ui = &mut leading;
+        ui.spacing_mut().item_spacing.x = GAP;
         if glass_icon_button(ui, &palette, Icon::Back, active.can_go_back, "Back (Alt+Left)").clicked() {
             toolbar.commands.push(UiCommand::Back);
         }
@@ -335,12 +343,13 @@ fn nav_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
             toolbar.commands.push(UiCommand::Home);
         }
         ui.add_space(4.0);
-
-        let right_width = 2.0 * 32.0 + 2.0 * 6.0 + 4.0;
-        let width = (ui.available_width() - right_width).max(120.0);
+        let width = (downloads_slot.min.x - 10.0 - ui.cursor().min.x).max(120.0);
         address_bar(ui, toolbar, width);
-        ui.add_space(4.0);
+    }
 
+    let mut slot_ui = |rect: Rect| ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    {
+        let ui = &mut slot_ui(downloads_slot);
         let downloads = toolbar.model.downloads;
         let active_downloads = downloads.active_count();
         let downloads_response = glass_icon_button(ui, &palette, Icon::Download, true, "Downloads (Ctrl+J)");
@@ -365,8 +374,8 @@ fn nav_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
         if downloads_response.clicked() {
             toolbar.commands.push(UiCommand::TogglePanel(Panel::Downloads));
         }
-        main_menu(ui, toolbar);
-    });
+    }
+    main_menu(&mut slot_ui(menu_slot), toolbar);
 
     if active.loading {
         let line = Rect::from_min_max(pos2(bar.min.x - 8.0, bar.max.y - 2.0), pos2(bar.max.x + 8.0, bar.max.y));
@@ -507,18 +516,17 @@ fn address_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>, width: f32) {
         location.focus_requested = false;
         ui.memory_mut(|memory| memory.request_focus(id));
     }
-    let output = ui
-        .scope_builder(egui::UiBuilder::new().max_rect(text_rect), |ui| {
-            TextEdit::singleline(&mut location.text)
-                .id(id)
-                .frame(Frame::NONE)
-                .margin(Margin::symmetric(0, 8))
-                .desired_width(text_rect.width())
-                .font(FontId::proportional(14.0))
-                .hint_text(egui::RichText::new("Search or enter address").color(palette.text_faint))
-                .show(ui)
-        })
-        .inner;
+    // A child Ui, not `scope_builder`: the text field lives inside the bar's already
+    // allocated rect and must not move the parent's layout cursor (doing so used to pull
+    // the trailing buttons back over the bookmark star).
+    let output = TextEdit::singleline(&mut location.text)
+        .id(id)
+        .frame(Frame::NONE)
+        .margin(Margin::symmetric(0, 8))
+        .desired_width(text_rect.width())
+        .font(FontId::proportional(14.0))
+        .hint_text(egui::RichText::new("Search or enter address").color(palette.text_faint))
+        .show(&mut ui.new_child(egui::UiBuilder::new().max_rect(text_rect)));
     let response = output.response;
 
     if response.gained_focus() {
