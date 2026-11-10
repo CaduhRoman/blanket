@@ -51,9 +51,11 @@ impl Default for PanelState {
 }
 
 /// Draw the open panel. Returns `true` if the user closed it.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
     panel: Panel,
+    expanded: bool,
     palette: &Palette,
     model: &UiModel<'_>,
     state: &mut PanelState,
@@ -61,6 +63,7 @@ pub fn show(
     width: f32,
 ) -> bool {
     let mut close = false;
+    // Slides in and out; while moving it is an empty sheet, the contents appear once open.
     egui::Panel::right("side-panel")
         .exact_size(width)
         .frame(
@@ -69,7 +72,7 @@ pub fn show(
                 .inner_margin(Margin::symmetric(14, 12))
                 .stroke(Stroke::new(1.0, palette.separator)),
         )
-        .show_inside(ui, |ui| {
+        .show_animated_inside(ui, expanded, |ui| {
             let title = match panel {
                 Panel::History => "History",
                 Panel::Bookmarks => "Bookmarks",
@@ -94,7 +97,7 @@ pub fn show(
                 Panel::Performance => performance(ui, palette, model, commands),
             }
         });
-    if ui.input(|input| input.key_pressed(egui::Key::Escape)) && !ui.ctx().text_edit_focused() {
+    if expanded && ui.input(|input| input.key_pressed(egui::Key::Escape)) && !ui.ctx().text_edit_focused() {
         close = true;
     }
     close

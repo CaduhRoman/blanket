@@ -14,7 +14,10 @@ use url::Url;
 
 use super::icons::{self, Icon};
 use super::theme::{PILL, Palette};
-use super::widgets::{GlassState, ellipsize, glass_icon_button, glass_icon_button_sized, paint_glass, progress_bar};
+use super::widgets::{
+    GlassState, MOTION, MOTION_FAST, ellipsize, fade, glass_icon_button, glass_icon_button_sized, glass_motion,
+    paint_glass, paint_glass_mix, progress_bar, tween, tween_from, tween_set,
+};
 use super::{Disposition, Panel, Texture, UiCommand, UiModel, ZoomChange};
 
 const STRIP_HEIGHT: f32 = 42.0;
@@ -126,8 +129,7 @@ fn caption_buttons(ui: &mut Ui, toolbar: &mut Toolbar<'_>, area: Rect) {
             vec2(CAPTION_BUTTON_WIDTH, area.height()),
         );
         let response = ui.interact(rect, Id::new(("caption", index)), Sense::click());
-        let hover = if response.hovered() { 1.0 } else { 0.0 };
-        let pressed = if response.is_pointer_button_down_on() { 1.0 } else { 0.0 };
+        let (hover, pressed) = glass_motion(ui, &response);
         paint_caption_button(ui.painter(), rect, caption, &palette, hover, pressed);
         if response.on_hover_text_at_pointer(tooltip).clicked() {
             toolbar.commands.push(match caption {
@@ -162,7 +164,10 @@ fn paint_caption_button(painter: &egui::Painter, rect: Rect, caption: Caption, p
     };
     let stroke = Stroke::new(1.0, color);
     // Glyphs sit on a 10×10 box, aligned to the pixel grid for crisp hairlines.
-    let center = painter.round_pos_to_pixel_center(rect.center());
+    let center = {
+        use egui::emath::GuiRounding as _;
+        rect.center().round_to_pixel_center(painter.pixels_per_point())
+    };
     let half = 5.0;
     match caption {
         Caption::Minimize => {
@@ -219,18 +224,28 @@ fn tab_strip(ui: &mut Ui, toolbar: &mut Toolbar<'_>, area: Rect) -> f32 {
     }
 
     let pointer_x = ui.input(|input| input.pointer.hover_pos()).map(|pos| pos.x);
+    let ctx = ui.ctx().clone();
     let mut dragged_rect = None;
+    let mut end = area.min.x;
     for (index, (tab, slot)) in tabs.iter().zip(&slots).enumerate() {
-        let mut rect = *slot;
+        // Tabs glide to their slot: opening grows a tab from nothing, closing and
+        // reordering slide the neighbours over.
+        let x_id = Id::new(("tab-x", tab.id));
+        let animated_x = tween(&ctx, x_id, slot.min.x, MOTION);
+        let animated_width = tween_from(&ctx, Id::new(("tab-w", tab.id)), 0.0, slot.width(), MOTION);
+        let mut rect = Rect::from_min_size(pos2(animated_x, slot.min.y), vec2(animated_width, slot.height()));
+        end = end.max(rect.max.x);
         let is_dragged = toolbar.strip.dragging == Some(tab.id);
         let response = ui.interact(rect, Id::new(("tab", tab.id)), Sense::click_and_drag());
         if response.drag_started() {
             toolbar.strip.dragging = Some(tab.id);
         }
         if is_dragged && response.dragged() {
-            rect = rect.translate(vec2(response.total_drag_delta().map_or(0.0, |delta| delta.x), 0.0));
+            rect = slot.translate(vec2(response.total_drag_delta().map_or(0.0, |delta| delta.x), 0.0));
             rect.min.x = rect.min.x.clamp(area.min.x, area.max.x - rect.width());
             rect.max.x = rect.min.x + slot.width();
+            // Follow the pointer exactly; on release the tab glides into its new slot.
+            tween_set(&ctx, x_id, rect.min.x);
             dragged_rect = Some((tab, rect));
             continue;
         }
@@ -257,6 +272,8 @@ fn tab_strip(ui: &mut Ui, toolbar: &mut Toolbar<'_>, area: Rect) -> f32 {
         ui.ctx().request_repaint();
     }
 
+    // The new tab button rides along with the tabs' animated edge.
+    let x = if tabs.is_empty() { x } else { end };
     let plus_rect = Rect::from_min_size(
         pos2((x + 4.0).min(area.max.x - new_tab_side), area.min.y + 1.0),
         Vec2::splat(new_tab_side),
@@ -288,9 +305,18 @@ fn paint_tab(
     response: &egui::Response,
 ) {
     let palette = toolbar.palette;
-    let painter = ui.painter();
+    // Clip to the (possibly still growing) tab so nothing spills over its neighbours.
+    let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    let ctx = ui.ctx();
+    let active_amount = fade(ctx, Id::new(("tab-active", tab.id)), is_active, MOTION_FAST);
+    let hover_amount = fade(
+        ctx,
+        Id::new(("tab-hover", tab.id)),
+        hovered || response.is_pointer_button_down_on(),
+        MOTION_FAST,
+    );
     let body = rect.shrink2(vec2(2.0, 0.0));
-    if is_active {
+    if active_amount > 0.0 {
         painter.rect_filled(
             body,
             CornerRadius {
@@ -299,12 +325,24 @@ fn paint_tab(
                 sw: 0,
                 se: 0,
             },
-            palette.tab_active,
+            palette.tab_active.gamma_multiply(active_amount),
         );
-    } else if hovered || response.is_pointer_button_down_on() {
-        painter.rect_filled(body.shrink2(vec2(0.0, 3.0)).translate(vec2(0.0, -2.0)), CornerRadius::same(8), palette.tab_hover);
-    } else if !next_is_active {
-        painter.vline(rect.max.x - 0.5, (rect.center().y - 8.0)..=(rect.center().y + 6.0), Stroke::new(1.0, palette.separator));
+    }
+    let hover_fill = hover_amount * (1.0 - active_amount);
+    if hover_fill > 0.0 {
+        painter.rect_filled(
+            body.shrink2(vec2(0.0, 3.0)).translate(vec2(0.0, -2.0)),
+            CornerRadius::same(8),
+            palette.tab_hover.gamma_multiply(hover_fill),
+        );
+    }
+    let separator = (1.0 - hover_amount) * (1.0 - active_amount);
+    if !next_is_active && separator > 0.0 {
+        painter.vline(
+            rect.max.x - 0.5,
+            (rect.center().y - 8.0)..=(rect.center().y + 6.0),
+            Stroke::new(1.0, palette.separator.gamma_multiply(separator)),
+        );
     }
 
     let compact = rect.width() < 92.0 || tab.pinned;
@@ -359,18 +397,17 @@ fn tab_interactions(ui: &mut Ui, toolbar: &mut Toolbar<'_>, tab: &Tab, rect: Rec
     let is_active = toolbar.model.tabs.active_id() == Some(tab.id);
     let compact = rect.width() < 92.0 || tab.pinned;
     let mut close_clicked = false;
-    if !compact && (is_active || response.hovered()) {
+    let close_visible = !compact && (is_active || response.hovered());
+    let close_amount = fade(ui.ctx(), Id::new(("tab-close-shown", tab.id)), close_visible, MOTION_FAST);
+    if close_amount > 0.0 && !compact {
         let close_rect = Rect::from_center_size(pos2(rect.max.x - 20.0, rect.center().y - 2.0), Vec2::splat(20.0));
         let close = ui.interact(close_rect, Id::new(("tab-close", tab.id)), Sense::click());
-        let state = GlassState::of(&close);
-        paint_glass(ui.painter(), close_rect, 10, &palette, state, true);
-        icons::paint(
-            ui.painter(),
-            close_rect.shrink(5.0),
-            Icon::Close,
-            if close.hovered() { palette.text } else { palette.text_dim },
-        );
-        close_clicked = close.clicked();
+        let (hover, pressed) = glass_motion(ui, &close);
+        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        paint_glass_mix(&painter, close_rect, 10, &palette, hover, pressed, true);
+        let color = super::widgets::lerp_color(palette.text_dim, palette.text, hover).gamma_multiply(close_amount);
+        icons::paint(&painter, close_rect.shrink(5.0), Icon::Close, color);
+        close_clicked = close_visible && close.clicked();
     }
     if close_clicked || response.middle_clicked() {
         toolbar.commands.push(UiCommand::CloseTab(tab.id));
@@ -574,18 +611,19 @@ fn address_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>, width: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
     let focused = ui.memory(|memory| memory.has_focus(id));
 
-    if focused {
-        ui.painter().rect_filled(rect, CornerRadius::same(PILL), palette.card);
-        ui.painter().rect_stroke(rect, CornerRadius::same(PILL), Stroke::new(1.5, palette.accent), StrokeKind::Inside);
-    } else {
-        let hovered = ui.rect_contains_pointer(rect);
-        paint_glass(
-            ui.painter(),
-            rect,
-            PILL,
-            &palette,
-            if hovered { GlassState::Hovered } else { GlassState::Idle },
-            false,
+    // Hover and focus both fade; focus swaps the glass for a solid field with an accent ring.
+    let focus = fade(ui.ctx(), id.with("focus"), focused, MOTION_FAST);
+    let hover = fade(ui.ctx(), id.with("hover"), ui.rect_contains_pointer(rect), MOTION_FAST);
+    if focus < 1.0 {
+        paint_glass_mix(ui.painter(), rect, PILL, &palette, hover * (1.0 - focus), 0.0, false);
+    }
+    if focus > 0.0 {
+        ui.painter().rect_filled(rect, CornerRadius::same(PILL), palette.card.gamma_multiply(focus));
+        ui.painter().rect_stroke(
+            rect.expand(2.0 * (1.0 - focus)),
+            CornerRadius::same(PILL),
+            Stroke::new(1.5, palette.accent.gamma_multiply(focus)),
+            StrokeKind::Inside,
         );
     }
 
@@ -726,6 +764,8 @@ fn address_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>, width: f32) {
         suggestions_popup(ui, location, &palette, rect, toolbar.commands);
     } else {
         location.popup_rect = None;
+        // Next time the suggestions open they slide in again.
+        tween_set(ui.ctx(), Id::new("address-suggestions-reveal"), 0.0);
     }
 }
 
@@ -791,10 +831,12 @@ fn suggestions_popup(ui: &Ui, location: &mut LocationBar, palette: &Palette, anc
     }
     let width = anchor.width();
     let mut chosen = None;
+    let reveal = tween(ui.ctx(), Id::new("address-suggestions-reveal"), 1.0, MOTION);
     let response = egui::Area::new(Id::new("address-suggestions"))
         .order(Order::Foreground)
-        .fixed_pos(anchor.left_bottom() + vec2(0.0, 6.0))
+        .fixed_pos(anchor.left_bottom() + vec2(0.0, 6.0 - 6.0 * (1.0 - reveal)))
         .show(ui.ctx(), |ui| {
+            ui.multiply_opacity(reveal);
             Frame::popup(ui.style())
                 .fill(palette.card)
                 .corner_radius(CornerRadius::same(14))
@@ -856,9 +898,12 @@ fn main_menu(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
     if button.clicked() {
         toolbar.location.menu_open = !toolbar.location.menu_open;
     }
+    let reveal_id = Id::new("main-menu-reveal");
     if !toolbar.location.menu_open {
+        tween_set(ui.ctx(), reveal_id, 0.0);
         return;
     }
+    let reveal = tween(ui.ctx(), reveal_id, 1.0, MOTION);
     let mut close = false;
     let active_zoom = toolbar.model.active.zoom;
     let open_panel = toolbar.open_panel;
@@ -866,15 +911,16 @@ fn main_menu(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
     let area = egui::Area::new(Id::new("main-menu"))
         .order(Order::Foreground)
         .pivot(Align2::RIGHT_TOP)
-        .fixed_pos(button.rect.right_bottom() + vec2(0.0, 8.0))
+        .fixed_pos(button.rect.right_bottom() + vec2(0.0, 8.0 - 8.0 * (1.0 - reveal)))
         .show(ui.ctx(), |ui| {
+            ui.multiply_opacity(reveal);
             Frame::popup(ui.style())
                 .fill(palette.card)
                 .corner_radius(CornerRadius::same(14))
                 .inner_margin(Margin::same(6))
                 .show(ui, |ui| {
                     ui.set_width(250.0);
-                    let mut item = |ui: &mut Ui, icon: Icon, label: &str, shortcut: &str, selected: bool| -> bool {
+                    let item = |ui: &mut Ui, icon: Icon, label: &str, shortcut: &str, selected: bool| -> bool {
                         let (row, response) = ui.allocate_exact_size(vec2(250.0, 32.0), Sense::click());
                         if response.hovered() || selected {
                             ui.painter().rect_filled(row, CornerRadius::same(9), palette.glass_hover);

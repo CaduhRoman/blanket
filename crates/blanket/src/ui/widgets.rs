@@ -25,17 +25,113 @@ impl GlassState {
     }
 }
 
+// ----- motion ----------------------------------------------------------------------------
+
+/// Default duration of chrome transitions, in seconds.
+pub const MOTION: f32 = 0.18;
+/// Quick feedback such as hover fades.
+pub const MOTION_FAST: f32 = 0.11;
+
+pub fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+#[derive(Clone, Copy)]
+struct Tween {
+    from: f32,
+    to: f32,
+    start: f64,
+}
+
+impl Tween {
+    fn value(&self, now: f64, duration: f32) -> f32 {
+        if duration <= 0.0 {
+            return self.to;
+        }
+        let t = ((now - self.start) / f64::from(duration)) as f32;
+        self.from + (self.to - self.from) * ease_out_cubic(t)
+    }
+}
+
+/// Smoothly move a value towards `target` with an ease-out curve. Retargeting mid-flight
+/// starts from the current position, so motion never jumps.
+pub fn tween(ctx: &egui::Context, id: egui::Id, target: f32, duration: f32) -> f32 {
+    tween_from(ctx, id, target, target, duration)
+}
+
+/// Like [`tween`], but the first time `id` is seen the value starts at `initial`
+/// (an element growing in, sliding from somewhere, …).
+pub fn tween_from(ctx: &egui::Context, id: egui::Id, initial: f32, target: f32, duration: f32) -> f32 {
+    let now = ctx.input(|input| input.time);
+    let value = ctx.data_mut(|data| {
+        let tween = data.get_temp_mut_or_insert_with(id, || Tween {
+            from: initial,
+            to: target,
+            start: now,
+        });
+        if (tween.to - target).abs() > 0.01 {
+            *tween = Tween {
+                from: tween.value(now, duration),
+                to: target,
+                start: now,
+            };
+        }
+        tween.value(now, duration)
+    });
+    if (value - target).abs() > 0.01 {
+        ctx.request_repaint();
+        value
+    } else {
+        target
+    }
+}
+
+/// Jump a tweened value to `value` without animating (e.g. while it follows the pointer).
+pub fn tween_set(ctx: &egui::Context, id: egui::Id, value: f32) {
+    let now = ctx.input(|input| input.time);
+    ctx.data_mut(|data| {
+        data.insert_temp(id, Tween {
+            from: value,
+            to: value,
+            start: now,
+        });
+    });
+}
+
+/// 0→1 as `on` becomes true, eased; used for hover and focus fades.
+pub fn fade(ctx: &egui::Context, id: egui::Id, on: bool, duration: f32) -> f32 {
+    tween(ctx, id, if on { 1.0 } else { 0.0 }, duration)
+}
+
+// ----- glass -------------------------------------------------------------------------------
+
 /// A translucent surface with a hairline border and a soft top highlight, in the
 /// spirit of iOS materials. `subtle` surfaces are invisible until hovered.
 pub fn paint_glass(painter: &Painter, rect: Rect, radius: u8, palette: &Palette, state: GlassState, subtle: bool) {
-    let fill = match state {
-        GlassState::Idle if subtle => Color32::TRANSPARENT,
-        GlassState::Idle => palette.glass,
-        GlassState::Hovered => palette.glass_hover,
-        GlassState::Pressed => palette.glass_pressed,
-        GlassState::Selected => palette.glass_hover,
+    let (hover, pressed) = match state {
+        GlassState::Idle => (0.0, 0.0),
+        GlassState::Hovered | GlassState::Selected => (1.0, 0.0),
+        GlassState::Pressed => (1.0, 1.0),
     };
-    if fill == Color32::TRANSPARENT {
+    paint_glass_mix(painter, rect, radius, palette, hover, pressed, subtle);
+}
+
+/// [`paint_glass`] with continuous hover/press amounts, for animated controls.
+pub fn paint_glass_mix(
+    painter: &Painter,
+    rect: Rect,
+    radius: u8,
+    palette: &Palette,
+    hover: f32,
+    pressed: f32,
+    subtle: bool,
+) {
+    let idle = if subtle { Color32::TRANSPARENT } else { palette.glass };
+    let fill = lerp_color(lerp_color(idle, palette.glass_hover, hover), palette.glass_pressed, pressed);
+    // Subtle surfaces bring their border in with the fill.
+    let presence = if subtle { hover.max(pressed) } else { 1.0 };
+    if presence <= 0.001 {
         return;
     }
     let corner = CornerRadius::same(radius);
@@ -45,10 +141,30 @@ pub fn paint_glass(painter: &Painter, rect: Rect, radius: u8, palette: &Palette,
     painter.with_clip_rect(highlight).rect_stroke(
         rect.shrink(0.5),
         corner,
-        Stroke::new(1.0, palette.glass_highlight),
+        Stroke::new(1.0, palette.glass_highlight.gamma_multiply(presence)),
         StrokeKind::Inside,
     );
-    painter.rect_stroke(rect, corner, Stroke::new(1.0, palette.glass_stroke), StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        corner,
+        Stroke::new(1.0, palette.glass_stroke.gamma_multiply(presence)),
+        StrokeKind::Inside,
+    );
+}
+
+/// Linear blend in premultiplied space (works for translucent colors too).
+pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+    Color32::from_rgba_premultiplied(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()), mix(a.a(), b.a()))
+}
+
+/// Animated hover and press amounts for an interactive response.
+pub fn glass_motion(ui: &Ui, response: &Response) -> (f32, f32) {
+    let ctx = ui.ctx();
+    let hover = fade(ctx, response.id.with("hover"), response.hovered(), MOTION_FAST);
+    let pressed = fade(ctx, response.id.with("press"), response.is_pointer_button_down_on(), 0.07);
+    (hover, pressed)
 }
 
 /// Circular glass button holding an icon.
@@ -68,10 +184,12 @@ pub fn glass_icon_button_sized(
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), sense);
     if ui.is_rect_visible(rect) {
-        let state = if enabled { GlassState::of(&response) } else { GlassState::Idle };
-        paint_glass(ui.painter(), rect, (side / 2.0) as u8, palette, state, subtle);
+        let (hover, pressed) = if enabled { glass_motion(ui, &response) } else { (0.0, 0.0) };
+        // A slight press-in gives tactile feedback.
+        let body = rect.shrink(pressed * 1.5);
+        paint_glass_mix(ui.painter(), body, (body.width() / 2.0) as u8, palette, hover, pressed, subtle);
         let color = if enabled { palette.text } else { palette.text_faint };
-        icons::paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(side * 0.5)), icon, color);
+        icons::paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(side * 0.5 - pressed)), icon, color);
     }
     let response = if enabled && !tooltip.is_empty() { response.on_hover_text(tooltip) } else { response };
     if enabled {
@@ -88,16 +206,13 @@ pub fn pill_button(ui: &mut Ui, palette: &Palette, text: &str, primary: bool) ->
     let size = vec2(galley.size().x + 28.0, 30.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
-        let state = GlassState::of(&response);
+        let (hover, pressed) = glass_motion(ui, &response);
+        let rect = rect.shrink(pressed * 1.0);
         if primary {
-            let fill = match state {
-                GlassState::Pressed => palette.accent.gamma_multiply(0.8),
-                GlassState::Hovered => palette.accent.gamma_multiply(0.92),
-                _ => palette.accent,
-            };
-            ui.painter().rect_filled(rect, CornerRadius::same(15), fill);
+            let dim = 1.0 - 0.08 * hover - 0.12 * pressed;
+            ui.painter().rect_filled(rect, CornerRadius::same(15), palette.accent.gamma_multiply(dim));
         } else {
-            paint_glass(ui.painter(), rect, 15, palette, state, false);
+            paint_glass_mix(ui.painter(), rect, 15, palette, hover, pressed, false);
         }
         let color = if primary { palette.accent_text } else { palette.text };
         ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);

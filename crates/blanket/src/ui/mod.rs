@@ -175,7 +175,17 @@ impl Weighted for Texture {
 
 struct Toast {
     text: String,
+    since: Instant,
     until: Instant,
+}
+
+impl Toast {
+    /// Opacity: eases in after appearing and out before leaving.
+    fn presence(&self, now: Instant) -> f32 {
+        let shown = now.saturating_duration_since(self.since).as_secs_f32() / 0.2;
+        let left = self.until.saturating_duration_since(now).as_secs_f32() / 0.35;
+        widgets::ease_out_cubic(shown.min(left))
+    }
 }
 
 const TOAST_DURATION: Duration = Duration::from_millis(2800);
@@ -188,6 +198,8 @@ pub struct Gui {
     location: toolbar::LocationBar,
     strip: toolbar::TabStrip,
     panel: Option<Panel>,
+    /// The panel being drawn: the open one, or the last one while it slides closed.
+    shown_panel: Option<Panel>,
     panels: panels::PanelState,
     pub dialogs: Dialogs,
     toasts: VecDeque<Toast>,
@@ -234,6 +246,7 @@ impl Gui {
             location: toolbar::LocationBar::default(),
             strip: toolbar::TabStrip::default(),
             panel: None,
+            shown_panel: None,
             panels: panels::PanelState::default(),
             dialogs: Dialogs::default(),
             toasts: VecDeque::new(),
@@ -262,11 +275,9 @@ impl Gui {
     /// The OS takes over the mouse during a window move or resize and swallows the
     /// button release; tell egui the button is up so no widget stays pressed.
     pub fn release_pointer(&mut self, window: &Window) {
-        // SAFETY: `dummy` is only unsafe because the id is not a real device; egui does
-        // not look at device ids.
-        let device_id = unsafe { winit::event::DeviceId::dummy() };
+        // egui does not look at device ids, so a placeholder is fine.
         let event = winit::event::WindowEvent::MouseInput {
-            device_id,
+            device_id: winit::event::DeviceId::dummy(),
             state: winit::event::ElementState::Released,
             button: winit::event::MouseButton::Left,
         };
@@ -359,9 +370,11 @@ impl Gui {
 
     pub fn toast(&mut self, text: String) {
         self.toasts.retain(|toast| toast.text != text);
+        let now = Instant::now();
         self.toasts.push_back(Toast {
             text,
-            until: Instant::now() + TOAST_DURATION,
+            since: now,
+            until: now + TOAST_DURATION,
         });
         while self.toasts.len() > 3 {
             self.toasts.pop_front();
@@ -422,6 +435,7 @@ impl Gui {
             location,
             strip,
             panel,
+            shown_panel,
             panels,
             dialogs,
             toasts,
@@ -449,8 +463,13 @@ impl Gui {
                         time,
                     },
                 );
-                if let Some(open) = *panel {
-                    let close = panels::show(ui, open, &palette, model, panels, &mut commands, SIDE_PANEL_WIDTH);
+                // The last panel stays around so it can slide closed.
+                if panel.is_some() {
+                    *shown_panel = *panel;
+                }
+                if let Some(shown) = *shown_panel {
+                    let close =
+                        panels::show(ui, shown, panel.is_some(), &palette, model, panels, &mut commands, SIDE_PANEL_WIDTH);
                     if close {
                         *panel = None;
                     }
@@ -610,19 +629,27 @@ fn show_overlays(
             .interactable(false)
             .anchor(Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
             .show(ctx, |ui| {
+                let now = Instant::now();
                 for toast in toasts {
-                    Frame::NONE
-                        .fill(palette.card)
-                        .stroke(egui::Stroke::new(1.0, palette.glass_stroke))
-                        .corner_radius(CornerRadius::same(18))
-                        .shadow(egui::Shadow {
-                            offset: [0, 6],
-                            blur: 18,
-                            spread: 0,
-                            color: palette.shadow,
-                        })
-                        .inner_margin(egui::Margin::symmetric(16, 9))
-                        .show(ui, |ui| ui.label(&toast.text));
+                    let presence = toast.presence(now);
+                    if presence < 1.0 {
+                        ctx.request_repaint();
+                    }
+                    ui.scope(|ui| {
+                        ui.multiply_opacity(presence);
+                        Frame::NONE
+                            .fill(palette.card)
+                            .stroke(egui::Stroke::new(1.0, palette.glass_stroke))
+                            .corner_radius(CornerRadius::same(18))
+                            .shadow(egui::Shadow {
+                                offset: [0, 6],
+                                blur: 18,
+                                spread: 0,
+                                color: palette.shadow,
+                            })
+                            .inner_margin(egui::Margin::symmetric(16, 9))
+                            .show(ui, |ui| ui.label(&toast.text));
+                    });
                     ui.add_space(6.0);
                 }
             });

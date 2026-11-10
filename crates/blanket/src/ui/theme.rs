@@ -162,6 +162,8 @@ pub fn apply_style(ctx: &egui::Context, palette: &Palette) {
 
     ctx.set_visuals(visuals);
     ctx.all_styles_mut(|style| {
+        // Popups fade in and panels slide at the chrome's common pace.
+        style.animation_time = super::widgets::MOTION;
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(10.0, 5.0);
         style.spacing.interact_size.y = 26.0;
