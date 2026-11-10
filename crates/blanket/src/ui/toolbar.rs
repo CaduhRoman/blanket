@@ -55,7 +55,8 @@ pub fn show(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
         .exact_size(NAV_HEIGHT)
         .frame(Frame::NONE.fill(palette.chrome).inner_margin(Margin::symmetric(8, 0)))
         .show_inside(ui, |ui| nav_bar(ui, toolbar));
-    if toolbar.model.config.ui.show_bookmarks_bar {
+    // No bookmarks yet: no bar, the space goes to the page.
+    if toolbar.model.config.ui.show_bookmarks_bar && !toolbar.model.bookmarks.items().is_empty() {
         egui::Panel::top("bookmarks-bar")
             .exact_size(BOOKMARKS_HEIGHT)
             .frame(Frame::NONE.fill(palette.chrome).inner_margin(Margin::symmetric(10, 0)))
@@ -82,10 +83,10 @@ fn title_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>) {
     );
     let tabs_end = tab_strip(ui, toolbar, tabs_area);
 
-    // Empty title bar: right of the tabs, and the band above them.
+    // Empty title bar right of the tabs moves the window (the band above the tabs
+    // belongs to the tabs themselves).
     let after_tabs = Rect::from_min_max(pos2(tabs_end + 4.0, full.min.y), pos2(controls.min.x, full.max.y));
-    let above_tabs = Rect::from_min_max(full.min, pos2(tabs_end + 4.0, tabs_area.min.y));
-    for (index, rect) in [after_tabs, above_tabs].into_iter().enumerate() {
+    for (index, rect) in [after_tabs].into_iter().enumerate() {
         if !rect.is_positive() {
             continue;
         }
@@ -236,7 +237,9 @@ fn tab_strip(ui: &mut Ui, toolbar: &mut Toolbar<'_>, area: Rect) -> f32 {
         let mut rect = Rect::from_min_size(pos2(animated_x, slot.min.y), vec2(animated_width, slot.height()));
         end = end.max(rect.max.x);
         let is_dragged = toolbar.strip.dragging == Some(tab.id);
-        let response = ui.interact(rect, Id::new(("tab", tab.id)), Sense::click_and_drag());
+        // Like Chrome, the whole strip height above a tab selects it: no need to aim.
+        let hitbox = rect.with_min_y(rect.min.y - (STRIP_HEIGHT - TAB_HEIGHT));
+        let response = ui.interact(hitbox, Id::new(("tab", tab.id)), Sense::click_and_drag());
         if response.drag_started() {
             toolbar.strip.dragging = Some(tab.id);
         }
