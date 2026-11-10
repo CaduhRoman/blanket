@@ -62,3 +62,8 @@ panic = "unwind"
 inherits = "release"
 debug = "limited"
 strip = "none"
+
+# Local fixes to Servo crates that the embedder API cannot reach. Each patched file is
+# marked with "[Blanket patch]"; see third_party/README.md.
+[patch.crates-io]
+servo-net = { path = "third_party/servo-net" }
