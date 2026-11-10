@@ -40,6 +40,14 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 
 Copy-Item target\release\blanket.exe $stage
 
+# ANGLE (EGL over Direct3D), which Servo's rendering loads at startup. The mozangle
+# build script leaves it in its OUT_DIR; without it the browser cannot open a window.
+$angle = Get-ChildItem target\release\build -Recurse -Filter libEGL.dll |
+    Where-Object { $_.DirectoryName -like "*mozangle-*" } |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $angle) { throw "ANGLE (libEGL.dll) not found under target\release\build" }
+Copy-Item (Join-Path $angle.DirectoryName "libEGL.dll"), (Join-Path $angle.DirectoryName "libGLESv2.dll") $stage
+
 # GStreamer core and its dependencies.
 Copy-Item "$gst\bin\*.dll" $stage
 
