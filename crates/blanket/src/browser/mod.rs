@@ -172,7 +172,10 @@ impl Browser {
         #[cfg(windows)]
         let attributes = {
             use winit::platform::windows::WindowAttributesExtWindows;
-            attributes.with_undecorated_shadow(true)
+            // The taskbar and Alt+Tab use the big icon; without it they show a blank page.
+            let (rgba, size) = crate::ui::icons::app_icon_rgba(256);
+            let taskbar_icon = Icon::from_rgba(rgba, size, size).ok();
+            attributes.with_undecorated_shadow(true).with_taskbar_icon(taskbar_icon)
         };
         let window = event_loop.create_window(attributes)?;
         let display_handle = event_loop.display_handle()?;
