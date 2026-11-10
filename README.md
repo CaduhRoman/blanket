@@ -1,67 +1,146 @@
-# Blanket
+<div align="center">
 
-Navegador desktop em Rust, com **Servo** como motor de renderização. O chrome é nativo (egui + winit); as páginas são HTML, CSS e JavaScript reais, pintados pelo Servo.
+<img src="docs/assets/logo.png" alt="Blanket" width="112">
 
-Não é um shell Chromium, CEF, WebKit ou Electron.
+# blanket
 
-## O que já funciona
+### Navegue sem limites.
 
-- Navegação HTTP/HTTPS em sites reais, com o motor Servo 0.8.
-- Várias abas, sessão, histórico com frecency, favoritos, downloads.
-- Barra de endereço inteligente, atalhos, painéis nativos (histórico, favoritos, downloads, definições, desempenho).
-- Suspensão inteligente de abas inativas, orçamento adaptativo de abas vivas, agendamento de tarefas em segundo plano.
-- Cache HTTP do próprio Servo (respeita `Cache-Control`, validação, `Vary`); caches da UI com orçamento em bytes.
-- Página inicial `blanket:newtab` servida em memória, sem APIs privilegiadas.
+**Leve por design. Poderoso por natureza.**
 
-## Requisitos
+Um navegador para Windows escrito em Rust, com um motor moderno, uma interface limpa e
+tudo o que você precisa — sem o peso de sempre.
 
-- Windows 10/11 x64
-- Rust 1.88 ou mais recente (`rustup`)
-- LLVM/clang no `PATH` (o Servo usa `bindgen` / mozangle)
-- Python 3 (algumas crates nativas do Servo)
-- ~20 GB livres para a primeira compilação
+[Baixar e compilar](#comece-agora) · [Recursos](#por-que-blanket) · [Roadmap](#o-que-vem-por-aí)
 
-Detalhes em [`docs/BUILDING.md`](docs/BUILDING.md). Limitações reais do motor em [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
+</div>
 
-## Compilar e correr
+<br>
+
+![A nova aba do Blanket, com o fundo de seda líquida](docs/assets/screenshot-newtab.png)
+
+<br>
+
+## Por que Blanket?
+
+A maioria dos navegadores é um mesmo motor com outra pintura por cima. O Blanket começa
+diferente: é construído em **Rust**, sobre o **Servo** — o motor web moderno, paralelo e
+seguro em memória que deu origem a partes do Firefox. O resultado é um navegador que
+abre rápido, responde rápido e trata a sua memória como um recurso precioso.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### ⚡ Rápido de verdade
+Abre em cerca de meio segundo. Estilo e layout das páginas são calculados em paralelo, usando
+todos os núcleos do seu processador.
+
+</td>
+<td width="50%" valign="top">
+
+### 🪶 Leve com a sua RAM
+Abas que você não usa há algum tempo **adormecem sozinhas** e liberam memória — e
+acordam exatamente onde você parou, com rolagem e histórico.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🎬 Tudo funciona
+YouTube, Twitch, Netflix e outros sites de vídeo abrem automaticamente no **modo de
+compatibilidade**. Você não precisa pensar nisso — só assistir.
+
+</td>
+<td valign="top">
+
+### 🔒 Seguro por construção
+Rust elimina classes inteiras de falhas de memória. HTTPS por padrão, nenhuma página —
+nem as internas — tem acesso ao seu histórico ou às suas configurações.
+
+</td>
+</tr>
+</table>
+
+<br>
+
+![Blanket com várias abas abertas](docs/assets/screenshot-servo.png)
+
+<br>
+
+## Pensado nos detalhes
+
+- **Abas na barra de título**, como você já conhece — com mais espaço para o que importa.
+  Clique em qualquer ponto acima de uma aba para selecioná-la, sem precisar mirar.
+- **Barra de endereço que adivinha.** Digite `you` e o Blanket completa `youtube.com`.
+  Ele aprende com os sites que você mais visita e com os mais recentes.
+- **Nova aba linda e útil**: seus sites favoritos a um clique, sobre uma arte de seda líquida.
+- **Animações suaves** em abas, menus, painéis e botões — tudo desliza, nada pisca.
+- **Abrir em segundo plano**: “Abrir link em nova aba” não te tira da página que você está lendo.
+- **Painéis nativos** para histórico, favoritos, downloads, desempenho e configurações.
+- **Barra de favoritos discreta**: só aparece quando você tem favoritos.
+- **Tema escuro elegante**, com controles em vidro translúcido e um único verde de destaque.
+
+## Modo de compatibilidade
+
+A web é enorme, e alguns sites usam tecnologias de vídeo que o Servo ainda está
+implementando. Em vez de te deixar na mão, o Blanket abre esses sites automaticamente com
+o mecanismo **WebView2** do Windows — o mesmo do Microsoft Edge — dentro da mesma janela,
+na mesma barra de abas, com o mesmo histórico e a mesma barra de endereço.
+
+- Ligado por padrão para YouTube, Twitch, Netflix, Prime Video, Disney+, Max, Globoplay,
+  Crunchyroll, Vimeo, Spotify, TikTok e Kick.
+- Você decide: ligue, desligue ou edite a lista em **Configurações → Modo de compatibilidade**.
+- Saiu do site de vídeo? A navegação volta para o Servo na mesma aba.
+
+## O que vem por aí
+
+- Áudio e vídeo nativos no Servo via GStreamer para todos os outros sites
+- Sincronização de favoritos e sessões
+- Importação de dados do Chrome, Edge e Firefox
+- Instalador com atualização automática
+- macOS e Linux
+
+## Comece agora
+
+O Blanket está em desenvolvimento ativo e, por enquanto, é distribuído como código-fonte
+para **Windows 10/11 (x64)**.
 
 ```powershell
-# Lógica, políticas e testes — sem Servo, leva segundos:
-cargo test -p blanket-core -p blanket-net
-
-# Navegador (primeira vez: dezenas de minutos):
+git clone https://github.com/CaduhRoman/blanket
+cd blanket
+. .\scripts\dev-env.ps1
 cargo run -p blanket --release
 ```
 
-Abra um URL na linha de comando:
+A primeira compilação leva alguns minutos (o motor inteiro é compilado na sua máquina).
+Requisitos e detalhes em [docs/BUILDING.md](docs/BUILDING.md).
 
-```powershell
-cargo run -p blanket --release -- https://servo.org
-```
+<details>
+<summary><b>Para desenvolvedores</b></summary>
 
-O perfil fica em `%APPDATA%\Blanket` (configuração, histórico, cookies do motor, logs). Use `--profile-dir` para um perfil temporário.
+<br>
 
-## Benchmarks
-
-```powershell
-cargo run -p blanket-bench --release -- --tabs 1,5,10 --url https://example.com/ --output bench-results/run.json
-```
-
-O harness mede Blanket, e Chrome/Firefox se estiverem instalados, nas mesmas URLs e contagens de abas. Os números são do *seu* computador; o relatório JSON não afirma superioridade. Ver [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
-
-## Arquitetura
-
-| Crate | Responsabilidade |
+| Componente | Papel |
 | --- | --- |
-| `blanket-core` | Decisões: abas, memória, agendador, cache LRU, histórico, sessão, segurança. Sem Servo. |
-| `blanket-net` | Downloads e DNS prefetch (Servo não expõe gestor de downloads ao embedder). |
-| `blanket` | Janela, chrome, integração Servo (`WebView`, `WebViewDelegate`, `ServoBuilder`). |
-| `blanket-bench` | Medições reproduzíveis. |
+| `blanket` | Janela, interface (egui) e integração com os motores |
+| `blanket-core` | Abas, memória, histórico, autocomplete, sessão, segurança — sem dependência de motor |
+| `blanket-net` | Downloads |
+| `blanket-bench` | Medições reproduzíveis de desempenho |
 
-A UI nunca fala com o motor: recebe um `UiModel` e devolve `UiCommand`. O conteúdo web é o framebuffer offscreen do Servo, copiado para a área central.
+- Limitações conhecidas do motor: [docs/LIMITATIONS.md](docs/LIMITATIONS.md)
+- Benchmarks: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
+- Correções aplicadas ao Servo: [third_party/README.md](third_party/README.md)
 
-`third_party/` guarda cópias de crates do Servo com correções que a API de embedder não alcança (por exemplo, o limite de cabeçalhos HTTP/2 que impedia o YouTube de carregar). Ver [`third_party/README.md`](third_party/README.md).
+</details>
 
-## Identidade
+<br>
 
-Chrome escuro, controlos em vidro (material translúcido no espírito do iOS), um único verde `#3dd68c`, wordmark **blanket**. As abas ocupam a barra de título, com os controlos da janela no canto superior direito, como no Chrome. Transições suaves em abas, botões, menus e painéis. A new tab usa a ilustração de seda líquida do projeto como fundo de ecrã inteiro.
+<div align="center">
+
+**Feito com Rust. Movido a Servo.**
+
+<sub>Licença MPL-2.0 · © CaduhRoman</sub>
+
+</div>
