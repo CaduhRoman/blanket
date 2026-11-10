@@ -574,6 +574,10 @@ pub struct LocationBar {
     suggested_for: Option<String>,
     popup_rect: Option<Rect>,
     menu_open: bool,
+    /// What the user typed, without any inline completion.
+    typed: String,
+    /// The inline completion currently shown after the typed text.
+    completion: Option<blanket_core::history::Autocomplete>,
 }
 
 impl LocationBar {
@@ -592,7 +596,9 @@ impl LocationBar {
         self.selected = None;
         self.suggestions.clear();
         self.suggested_for = None;
+        self.completion = None;
         self.show_url(url);
+        self.typed = self.text.clone();
         // A blank page invites typing right away.
         if url.is_none_or(|url| display_text(url).is_empty()) {
             self.request_focus();
@@ -698,17 +704,39 @@ fn address_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>, width: f32) {
     if response.gained_focus() {
         location.editing = true;
         location.text = active.url.as_ref().map(display_text).unwrap_or_default();
+        location.typed = location.text.clone();
+        location.completion = None;
         location.select_all = true;
     }
     if location.select_all && response.has_focus() {
         location.select_all = false;
-        let mut state = output.state;
+        let mut state = output.state.clone();
         let end = CCursor::new(location.text.chars().count());
         state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(0), end)));
         state.store(ui.ctx(), id);
     }
     if response.changed() {
         location.selected = None;
+        // Inline autocomplete ("you" → "you|tube.com", the completed part selected) only
+        // while typing forward at the end: Backspace/Delete remove the completion instead
+        // of bringing it back, and typing over the selection refines it.
+        let length = location.text.chars().count();
+        let deleting = ui.input(|input| input.key_pressed(Key::Backspace) || input.key_pressed(Key::Delete))
+            || length <= location.typed.chars().count();
+        let at_end = output.cursor_range.is_some_and(|range| range.primary.index == length);
+        location.typed = location.text.clone();
+        location.completion = None;
+        if !deleting && at_end {
+            if let Some(done) = toolbar.model.history.autocomplete(&location.text, toolbar.model.now_unix) {
+                let total = done.text.chars().count();
+                location.text = done.text.clone();
+                location.completion = Some(done);
+                let mut state = output.state.clone();
+                state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(length), CCursor::new(total))));
+                state.store(ui.ctx(), id);
+                ui.ctx().request_repaint();
+            }
+        }
         toolbar.commands.push(UiCommand::OmniboxInput(location.text.clone()));
     }
 
@@ -734,9 +762,15 @@ fn address_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>, width: f32) {
     let disposition = if alt { Disposition::NewTab } else { Disposition::CurrentTab };
     if submitted {
         let choice = location.selected.and_then(|index| location.suggestions.get(index));
+        let completed = location.completion.as_ref().filter(|done| done.text == location.text.trim());
         match choice {
             Some(suggestion) => toolbar.commands.push(UiCommand::OpenUrl {
                 url: suggestion.url.clone(),
+                disposition,
+            }),
+            // Go exactly where the completion came from (scheme, www., port).
+            None if completed.is_some() => toolbar.commands.push(UiCommand::OpenUrl {
+                url: completed.map(|done| done.url.clone()).expect("checked above"),
                 disposition,
             }),
             None if !location.text.trim().is_empty() => toolbar.commands.push(UiCommand::Navigate {
@@ -748,6 +782,7 @@ fn address_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>, width: f32) {
         toolbar.commands.push(UiCommand::FocusContent);
         location.editing = false;
         location.selected = None;
+        location.completion = None;
     }
 
     let pointer_on_popup = location
@@ -757,6 +792,7 @@ fn address_bar(ui: &mut Ui, toolbar: &mut Toolbar<'_>, width: f32) {
     if response.lost_focus() && !submitted && !pointer_on_popup {
         location.editing = false;
         location.selected = None;
+        location.completion = None;
     }
 
     if location.editing && (response.has_focus() || pointer_on_popup) && !location.text.trim().is_empty() {
@@ -776,8 +812,19 @@ fn update_suggestions(location: &mut LocationBar, model: &UiModel<'_>) {
     }
     let mut suggestions = Vec::new();
     let config = &model.config.general;
-    match blanket_core::omnibox::interpret(&query, &config.search_engine, model.config.security.prefer_https_for_typed_hosts)
-    {
+    // With an inline completion showing, the first row is where Enter goes, and searching
+    // uses what the user actually typed.
+    let completed = location.completion.as_ref().filter(|done| done.text == query).map(|done| done.url.clone());
+    let typed_query = if completed.is_some() { location.typed.trim().to_owned() } else { query.clone() };
+    let target = match completed {
+        Some(url) => Some(blanket_core::omnibox::OmniboxTarget::Navigate(url)),
+        None => blanket_core::omnibox::interpret(
+            &query,
+            &config.search_engine,
+            model.config.security.prefer_https_for_typed_hosts,
+        ),
+    };
+    match target {
         Some(blanket_core::omnibox::OmniboxTarget::Navigate(url)) => suggestions.push(Suggestion {
             kind: SuggestionKind::Visit,
             title: display_text(&url),
@@ -790,7 +837,7 @@ fn update_suggestions(location: &mut LocationBar, model: &UiModel<'_>) {
         }),
         None => {},
     }
-    for bookmark in model.bookmarks.search(&query, 3) {
+    for bookmark in model.bookmarks.search(&typed_query, 3) {
         if suggestions.iter().all(|existing| existing.url != bookmark.url) {
             suggestions.push(Suggestion {
                 kind: SuggestionKind::Bookmark,
@@ -799,7 +846,7 @@ fn update_suggestions(location: &mut LocationBar, model: &UiModel<'_>) {
             });
         }
     }
-    for entry in model.history.search(&query, MAX_SUGGESTIONS, model.now_unix) {
+    for entry in model.history.search(&typed_query, MAX_SUGGESTIONS, model.now_unix) {
         if suggestions.len() >= MAX_SUGGESTIONS {
             break;
         }
@@ -815,8 +862,8 @@ fn update_suggestions(location: &mut LocationBar, model: &UiModel<'_>) {
     if suggestions.first().is_some_and(|first| first.kind == SuggestionKind::Visit) {
         suggestions.push(Suggestion {
             kind: SuggestionKind::Search,
-            title: format!("{query} — search with {}", config.search_engine.name),
-            url: search_url(&query, &config.search_engine),
+            title: format!("{typed_query} — search with {}", config.search_engine.name),
+            url: search_url(&typed_query, &config.search_engine),
         });
     }
     location.suggestions = suggestions;

@@ -43,6 +43,22 @@ pub struct History {
     dirty: bool,
 }
 
+/// An inline address bar completion: the full text to show (typed part + completed
+/// part) and where Enter goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Autocomplete {
+    pub text: String,
+    pub url: Url,
+}
+
+fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
+    text.len() >= prefix.len() && text.is_char_boundary(prefix.len()) && text[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+fn strip_prefix_ignore_ascii_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    starts_with_ignore_ascii_case(text, prefix).then(|| &text[prefix.len()..])
+}
+
 /// Only these schemes are recorded. Internal pages and `data:` URLs would clutter the
 /// history and suggestions.
 fn is_recordable(url: &Url) -> bool {
@@ -169,6 +185,73 @@ impl History {
         scored.into_iter().take(limit).map(|(_, entry)| entry).collect()
     }
 
+    /// Inline completion for address bar input, like Firefox's autofill: "you" completes
+    /// to "youtube.com" (the most frecent host starting with the input) and, once the
+    /// input has a path, "github.com/se" completes to the most frecent URL starting with
+    /// it. The typed part keeps the user's casing. `www.` and the scheme are optional.
+    pub fn autocomplete(&self, input: &str, now: u64) -> Option<Autocomplete> {
+        if input.is_empty() || input.contains(char::is_whitespace) {
+            return None;
+        }
+        // A typed scheme is fine ("https://you…"), as long as it is a web one.
+        let rest = ["https://", "http://"]
+            .iter()
+            .find_map(|scheme| strip_prefix_ignore_ascii_case(input, scheme))
+            .unwrap_or(input);
+        if rest.is_empty() || rest.contains("://") {
+            return None;
+        }
+        let typed_www = strip_prefix_ignore_ascii_case(rest, "www.").is_some();
+        let web = self.entries.values().filter(|entry| matches!(entry.url.scheme(), "http" | "https"));
+
+        if !rest.contains('/') {
+            // Host completion: rank hosts by the frecency of all their pages.
+            let mut hosts: HashMap<String, (f64, &HistoryEntry)> = HashMap::new();
+            for entry in web {
+                let Some(host) = entry.url.host_str() else {
+                    continue;
+                };
+                let host = match entry.url.port() {
+                    Some(port) => format!("{host}:{port}"),
+                    None => host.to_owned(),
+                };
+                let score = entry.frecency(now);
+                let slot = hosts.entry(host).or_insert((0.0, entry));
+                slot.0 += score;
+                if score > slot.1.frecency(now) {
+                    slot.1 = entry;
+                }
+            }
+            let (host, (_, entry)) = hosts
+                .iter()
+                .filter(|(host, _)| {
+                    let shown = if typed_www { host.as_str() } else { host.trim_start_matches("www.") };
+                    starts_with_ignore_ascii_case(shown, rest)
+                })
+                .max_by(|a, b| a.1.0.total_cmp(&b.1.0).then_with(|| b.0.len().cmp(&a.0.len())))?;
+            let shown = if typed_www { host.as_str() } else { host.trim_start_matches("www.") };
+            let url = Url::parse(&format!("{}://{host}/", entry.url.scheme())).ok()?;
+            return Some(Autocomplete {
+                text: format!("{input}{}", &shown[rest.len()..]),
+                url,
+            });
+        }
+
+        // URL completion once a path is being typed.
+        let (entry, shown) = web
+            .filter_map(|entry| {
+                let full = entry.url.as_str();
+                let without_scheme = full.split_once("://").map_or(full, |(_, rest)| rest);
+                let shown = if typed_www { without_scheme } else { without_scheme.trim_start_matches("www.") };
+                starts_with_ignore_ascii_case(shown, rest).then_some((entry, shown))
+            })
+            .max_by(|a, b| a.0.frecency(now).total_cmp(&b.0.frecency(now)).then_with(|| b.1.len().cmp(&a.1.len())))?;
+        Some(Autocomplete {
+            text: format!("{input}{}", &shown[rest.len()..]),
+            url: entry.url.clone(),
+        })
+    }
+
     /// The most frecent entry of each host, best first, for "top sites" tiles.
     pub fn top_sites(&self, limit: usize, now: u64) -> Vec<&HistoryEntry> {
         let mut best: HashMap<&str, (f64, &HistoryEntry)> = HashMap::new();
@@ -233,6 +316,58 @@ mod tests {
         assert!(!history.record_visit(&url("data:text/html,x"), false, 0));
         assert!(history.is_empty());
         assert!(!history.is_dirty());
+    }
+
+    fn completion(history: &History, input: &str, now: u64) -> Option<(String, String)> {
+        history.autocomplete(input, now).map(|done| (done.text, done.url.to_string()))
+    }
+
+    #[test]
+    fn autocomplete_completes_frequent_hosts() {
+        let now = 400 * DAY;
+        let mut history = History::default();
+        for _ in 0..5 {
+            history.record_visit(&url("https://www.youtube.com/watch?v=1"), false, now);
+        }
+        history.record_visit(&url("https://www.youtube.com/"), true, now);
+        history.record_visit(&url("https://yourdictionary.com/x"), false, now - 60 * DAY);
+
+        assert_eq!(
+            completion(&history, "you", now),
+            Some(("youtube.com".into(), "https://www.youtube.com/".into()))
+        );
+        // The user's casing is kept for the typed part.
+        assert_eq!(completion(&history, "YouT", now).unwrap().0, "YouTube.com");
+        // Typing "www." or a scheme still completes.
+        assert_eq!(completion(&history, "www.yo", now).unwrap().0, "www.youtube.com");
+        assert_eq!(completion(&history, "https://you", now).unwrap().0, "https://youtube.com");
+        // A less frecent host wins once the input only matches it.
+        assert_eq!(completion(&history, "your", now).unwrap().0, "yourdictionary.com");
+    }
+
+    #[test]
+    fn autocomplete_completes_urls_once_a_path_is_typed() {
+        let now = 400 * DAY;
+        let mut history = History::default();
+        for _ in 0..3 {
+            history.record_visit(&url("https://github.com/servo/servo"), true, now);
+        }
+        history.record_visit(&url("https://github.com/rust-lang/rust"), false, now);
+        assert_eq!(
+            completion(&history, "github.com/se", now),
+            Some(("github.com/servo/servo".into(), "https://github.com/servo/servo".into()))
+        );
+    }
+
+    #[test]
+    fn autocomplete_ignores_non_matches_and_searches() {
+        let now = 400 * DAY;
+        let mut history = History::default();
+        history.record_visit(&url("https://youtube.com/"), false, now);
+        assert_eq!(completion(&history, "tube", now), None);
+        assert_eq!(completion(&history, "you tube", now), None);
+        assert_eq!(completion(&history, "", now), None);
+        assert_eq!(completion(&history, "ftp://you", now), None);
     }
 
     #[test]
