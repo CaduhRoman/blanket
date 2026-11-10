@@ -74,3 +74,17 @@ $size = "{0:N0} MB" -f ((Get-Item $zip).Length / 1MB)
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
 Write-Host "Package: $zip ($size)"
 Write-Host "SHA256:  $hash"
+
+# Installer (Inno Setup 6): dist\Blanket-<version>-setup.exe
+$iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |
+    Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $iscc) {
+    Write-Warning "Inno Setup 6 not found (winget install JRSoftware.InnoSetup); skipping the installer."
+    return
+}
+$icon = Get-ChildItem target\release\build -Recurse -Filter blanket.ico | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+& $iscc /Qp "/DAppVersion=$version" "/DSourceDir=$stage" "/DIconFile=$($icon.FullName)" "/O$(Join-Path $repo 'dist')" packaging\installer\blanket.iss
+if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
+$setup = Join-Path $repo "dist\Blanket-$version-setup.exe"
+Write-Host ("Setup:   $setup ({0:N0} MB)" -f ((Get-Item $setup).Length / 1MB))
+Write-Host "SHA256:  $((Get-FileHash $setup -Algorithm SHA256).Hash)"
