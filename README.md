@@ -40,7 +40,7 @@ todos os núcleos do seu processador.
 <td width="50%" valign="top">
 
 ### 🪶 Leve com a sua RAM
-Abas que você não usa há algum tempo **adormecem sozinhas** e liberam memória — e
+Como o Memory Saver do Chrome: só abas esquecidas há **horas** adormecem e liberam memória — nunca a que você acabou de deixar — — e
 acordam exatamente onde você parou, com rolagem e histórico.
 
 </td>

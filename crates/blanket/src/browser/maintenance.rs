@@ -106,12 +106,12 @@ impl Browser {
         if let Some(memory) = memory {
             let pressure = self.pressure.update(&self.config.memory, memory);
             if pressure != previous_pressure {
-                info!(?previous_pressure, ?pressure, available_percent = memory.available_percent(), "memory pressure changed");
+                info!(?previous_pressure, ?pressure, available_mib = memory.available_bytes / (1024 * 1024), "memory pressure changed");
             }
-            let live_bytes = process.map_or(0, |usage| usage.resident_bytes);
-            let budget = self.policy.live_tab_budget(memory, pressure, live_bytes);
+
+            let budget = self.policy.live_tab_budget();
             self.perf.pressure = Some(pressure);
-            self.perf.live_budget = Some(budget);
+            self.perf.live_budget = budget;
             let activity = TabActivity::collect(&self.tabs, now);
             let pressure_rose = pressure > previous_pressure;
             for action in self.policy.plan(pressure, budget, &activity) {

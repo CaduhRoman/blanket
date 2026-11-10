@@ -121,9 +121,16 @@ impl Default for SearchEngine {
     }
 }
 
+/// Bumped when the memory policy changes meaning; older saved values are replaced.
+pub const MEMORY_POLICY_VERSION: u32 = 2;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
+    /// Version of the memory policy these values were written for. Files from an older
+    /// policy get the current defaults (see [`BlanketConfig::validated`]).
+    #[serde(default)]
+    pub policy_version: u32,
     /// Master switch for Smart Tab Suspension.
     pub suspension_enabled: bool,
     /// A background tab idle for this long becomes eligible for suspension under normal
@@ -132,12 +139,10 @@ pub struct MemoryConfig {
     /// Never suspend a tab that was active more recently than this, even under critical
     /// pressure. Protects tabs the user is flipping between.
     pub min_idle_secs: u64,
-    /// Below this percentage of available system RAM the browser is under *moderate*
-    /// pressure.
-    pub moderate_available_percent: f32,
-    /// Below this percentage of available system RAM the browser is under *critical*
-    /// pressure.
-    pub critical_available_percent: f32,
+    /// Below this much free system RAM (MiB) the browser is under *moderate* pressure.
+    pub moderate_available_mib: u64,
+    /// Below this much free system RAM (MiB) the browser is under *critical* pressure.
+    pub critical_available_mib: u64,
     /// Rough cost of a live tab used to derive the adaptive live-tab budget before real
     /// measurements are available.
     pub estimated_tab_cost_mib: u64,
@@ -151,10 +156,14 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             suspension_enabled: true,
-            suspend_after_secs: 30 * 60,
-            min_idle_secs: 60,
-            moderate_available_percent: 25.0,
-            critical_available_percent: 12.0,
+            policy_version: MEMORY_POLICY_VERSION,
+            // Like Chrome's Memory Saver ("balanced"): a tab sleeps after hours of
+            // disuse, not minutes.
+            suspend_after_secs: 4 * 60 * 60,
+            min_idle_secs: 10 * 60,
+            // Chromium's Windows thresholds.
+            moderate_available_mib: 1000,
+            critical_available_mib: 400,
             estimated_tab_cost_mib: 120,
             max_live_tabs: 0,
             sample_interval_secs: 10,
@@ -284,7 +293,14 @@ impl BlanketConfig {
                     path: path.to_owned(),
                     message: error.to_string(),
                 })?;
-                Ok(config.validated())
+                let migrated = config.memory.policy_version < MEMORY_POLICY_VERSION;
+                let config = config.validated();
+                if migrated {
+                    if let Err(error) = config.save(path) {
+                        warn!(%error, "could not save the migrated configuration");
+                    }
+                }
+                Ok(config)
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let config = Self::default();
@@ -313,12 +329,19 @@ impl BlanketConfig {
     /// CPU.
     pub fn validated(mut self) -> Self {
         let memory = &mut self.memory;
-        memory.min_idle_secs = memory.min_idle_secs.max(10);
-        memory.suspend_after_secs = memory.suspend_after_secs.max(memory.min_idle_secs);
-        memory.critical_available_percent = memory.critical_available_percent.clamp(1.0, 50.0);
-        memory.moderate_available_percent = memory
-            .moderate_available_percent
-            .clamp(memory.critical_available_percent, 90.0);
+        if memory.policy_version < MEMORY_POLICY_VERSION {
+            // The old policy released tabs after a minute of disuse on machines with a
+            // normal amount of free RAM. Its values are replaced, not reinterpreted; only
+            // the user's on/off choice is kept.
+            *memory = MemoryConfig {
+                suspension_enabled: memory.suspension_enabled,
+                ..MemoryConfig::default()
+            };
+        }
+        memory.min_idle_secs = memory.min_idle_secs.max(60);
+        memory.suspend_after_secs = memory.suspend_after_secs.max(memory.min_idle_secs).max(15 * 60);
+        memory.critical_available_mib = memory.critical_available_mib.clamp(64, 16_384);
+        memory.moderate_available_mib = memory.moderate_available_mib.clamp(memory.critical_available_mib, 65_536);
         memory.estimated_tab_cost_mib = memory.estimated_tab_cost_mib.clamp(16, 4096);
         memory.sample_interval_secs = memory.sample_interval_secs.clamp(1, 600);
 
@@ -377,18 +400,39 @@ mod tests {
     }
 
     #[test]
+    fn old_memory_policy_files_are_migrated() {
+        // What every profile created before the policy change has on disk.
+        let old = "[memory]\nsuspension_enabled = false\nsuspend_after_secs = 1800\nmin_idle_secs = 60\n\
+                   moderate_available_percent = 25.0\ncritical_available_percent = 12.0\n";
+        let config = toml::from_str::<BlanketConfig>(old).unwrap().validated();
+        assert_eq!(
+            config.memory,
+            MemoryConfig {
+                suspension_enabled: false,
+                ..MemoryConfig::default()
+            }
+        );
+        // Current files keep the user's own values.
+        let mut current = BlanketConfig::default();
+        current.memory.suspend_after_secs = 2 * 60 * 60;
+        let text = toml::to_string(&current).unwrap();
+        let parsed = toml::from_str::<BlanketConfig>(&text).unwrap().validated();
+        assert_eq!(parsed.memory.suspend_after_secs, 2 * 60 * 60);
+    }
+
+    #[test]
     fn validation_clamps_dangerous_values() {
         let mut config = BlanketConfig::default();
         config.memory.min_idle_secs = 0;
         config.memory.suspend_after_secs = 1;
-        config.memory.moderate_available_percent = 5.0;
-        config.memory.critical_available_percent = 20.0;
+        config.memory.moderate_available_mib = 100;
+        config.memory.critical_available_mib = 900;
         config.scheduler.animation_frame_interval_ms = 0;
         config.general.search_engine.template = "https://example.com/".into();
         let config = config.validated();
-        assert_eq!(config.memory.min_idle_secs, 10);
-        assert!(config.memory.suspend_after_secs >= config.memory.min_idle_secs);
-        assert!(config.memory.moderate_available_percent >= config.memory.critical_available_percent);
+        assert_eq!(config.memory.min_idle_secs, 60);
+        assert_eq!(config.memory.suspend_after_secs, 15 * 60);
+        assert!(config.memory.moderate_available_mib >= config.memory.critical_available_mib);
         assert_eq!(config.scheduler.animation_frame_interval_ms, 4);
         assert_eq!(config.general.search_engine, SearchEngine::default());
     }

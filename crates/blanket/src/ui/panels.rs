@@ -488,19 +488,40 @@ fn settings(ui: &mut Ui, palette: &Palette, model: &UiModel<'_>, state: &mut Pan
             });
 
             section(ui, "Memory");
-            ui.checkbox(&mut draft.memory.suspension_enabled, "Put inactive tabs to sleep");
+            ui.checkbox(&mut draft.memory.suspension_enabled, "Memory saver: put long-unused tabs to sleep");
             ui.add_enabled_ui(draft.memory.suspension_enabled, |ui| {
-                let mut minutes = (draft.memory.suspend_after_secs / 60).max(1);
-                ui.add(egui::Slider::new(&mut minutes, 1..=240).text("minutes idle").logarithmic(true));
-                draft.memory.suspend_after_secs = minutes * 60;
+                // Presets in the spirit of Chrome's Memory Saver modes.
+                const PRESETS: [(&str, u64); 4] = [
+                    ("Light — after 8 hours", 8 * 3600),
+                    ("Balanced — after 4 hours", 4 * 3600),
+                    ("Strong — after 1 hour", 3600),
+                    ("Maximum — after 15 minutes", 15 * 60),
+                ];
+                let current = PRESETS
+                    .iter()
+                    .find(|(_, secs)| *secs == draft.memory.suspend_after_secs)
+                    .map_or_else(
+                        || format!("Custom — after {} min", draft.memory.suspend_after_secs / 60),
+                        |(label, _)| (*label).to_owned(),
+                    );
+                egui::ComboBox::from_id_salt("memory-saver")
+                    .selected_text(current)
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        for (label, secs) in PRESETS {
+                            ui.selectable_value(&mut draft.memory.suspend_after_secs, secs, label);
+                        }
+                    });
                 let mut max_live = draft.memory.max_live_tabs;
-                ui.add(egui::Slider::new(&mut max_live, 0..=60).text("max awake tabs (0 = automatic)"));
+                ui.add(egui::Slider::new(&mut max_live, 0..=60).text("max awake tabs (0 = no limit)"));
                 draft.memory.max_live_tabs = max_live;
             });
             ui.label(
                 RichText::new(
-                    "Sleeping tabs keep their address, history and scroll position. Pages with unsaved form input, \
-                     playing media or pinned tabs are never put to sleep automatically.",
+                    "Tabs you are using are never reloaded behind your back. Only tabs unused for the time above \
+                     go to sleep; if the computer runs critically low on memory, the least recently used tab sleeps \
+                     first, one at a time. Sleeping tabs keep their address, history and scroll position. Tabs \
+                     with unsaved form input, playing media or pinned tabs never sleep automatically.",
                 )
                 .small()
                 .color(palette.text_faint),
@@ -620,7 +641,7 @@ fn performance(ui: &mut Ui, palette: &Palette, model: &UiModel<'_>, commands: &m
             None => "–",
         };
         stat(ui, palette, "Memory pressure", pressure.to_owned());
-        stat(ui, palette, "Awake tab budget", perf.live_budget.map_or("–".into(), |budget| budget.to_string()));
+        stat(ui, palette, "Awake tab limit", perf.live_budget.map_or("None".into(), |budget| budget.to_string()));
 
         section(ui, "Caches");
         if let Some(entries) = perf.http_cache_entries {
