@@ -21,6 +21,7 @@ pub enum CompatEvent {
     OpenNewTab { url: Url, background: bool },
     LeaveCompat(Url),
     Fullscreen(bool),
+    PlayingAudio(bool),
     Command(UiCommand),
 }
 

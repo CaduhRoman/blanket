@@ -107,6 +107,12 @@ impl Browser {
                     self.set_content_fullscreen(fullscreen);
                 }
             },
+            CompatEvent::PlayingAudio(playing) => {
+                // Shows the speaker on the tab, and keeps the memory saver away from it.
+                if let Some(tab) = self.tabs.get_mut(id) {
+                    tab.media_playing = playing;
+                }
+            },
             CompatEvent::Command(command) => self.execute(command),
         }
         self.request_redraw();

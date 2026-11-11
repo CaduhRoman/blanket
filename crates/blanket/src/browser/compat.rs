@@ -42,6 +42,8 @@ pub enum CompatEvent {
     /// continues on Servo in the same tab.
     LeaveCompat(Url),
     Fullscreen(bool),
+    /// The page started or stopped playing audio (speaker icon on the tab).
+    PlayingAudio(bool),
     /// A browser shortcut pressed while the page had keyboard focus.
     Command(UiCommand),
 }
@@ -263,11 +265,14 @@ impl CompatHost {
                     let redirected = read_bool(|out| args.IsRedirected(out));
                     // Links the user follows to an ordinary site go back to Servo. Redirects
                     // (sign-in flows, consent pages) stay here.
+                    // Sign-in pages stay too: logging in on YouTube goes through
+                    // accounts.google.com, and the session cookies must land here.
                     if let Some(target) = target {
                         if user_initiated &&
                             !redirected &&
                             matches!(target.scheme(), "http" | "https") &&
-                            !config.borrow().applies_to(&target)
+                            !config.borrow().applies_to(&target) &&
+                            !is_sign_in_page(&target)
                         {
                             args.SetCancel(true)?;
                             emit(CompatEvent::LeaveCompat(target));
@@ -310,6 +315,21 @@ impl CompatHost {
                 })),
                 &mut token,
             )?;
+
+            if let Ok(webview8) = webview.cast::<ICoreWebView2_8>() {
+                let emit = push.clone();
+                webview8.add_IsDocumentPlayingAudioChanged(
+                    &IsDocumentPlayingAudioChangedEventHandler::create(Box::new(move |sender, _| {
+                        let playing = sender
+                            .as_ref()
+                            .and_then(|webview| webview.cast::<ICoreWebView2_8>().ok())
+                            .is_some_and(|webview| read_bool(|out| webview.IsDocumentPlayingAudio(out)));
+                        emit(CompatEvent::PlayingAudio(playing));
+                        Ok(())
+                    })),
+                    &mut token,
+                )?;
+            }
 
             if let Ok(webview11) = webview.cast::<ICoreWebView2_11>() {
                 let menu_at = context_menu_at.clone();
@@ -511,6 +531,32 @@ impl Drop for CompatHost {
     fn drop(&mut self) {
         self.close_all();
     }
+}
+
+/// Identity providers that sites in compatibility mode sign in through. Followed from a
+/// compatibility tab they stay there, so the login cookies belong to the same engine as
+/// the site. (Typed or opened from a Servo tab, they still use Servo.)
+const SIGN_IN_HOSTS: &[&str] = &[
+    "accounts.google.com",
+    "accounts.youtube.com",
+    "myaccount.google.com",
+    "consent.google.com",
+    "login.live.com",
+    "login.microsoftonline.com",
+    "account.live.com",
+    "appleid.apple.com",
+    "www.facebook.com",
+    "m.facebook.com",
+    "api.twitter.com",
+    "x.com",
+    "discord.com",
+];
+
+fn is_sign_in_page(url: &Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        let host = host.to_ascii_lowercase();
+        SIGN_IN_HOSTS.contains(&host.as_str())
+    })
 }
 
 fn rect_eq(a: &RECT, b: &RECT) -> bool {
