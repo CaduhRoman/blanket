@@ -66,6 +66,8 @@ use crate::ui::{ActiveView, Disposition, Gui, UiCommand, UiModel};
 
 const MIN_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(480.0, 320.0);
 const INITIAL_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1280.0, 800.0);
+/// How long the engine may take to shut down after our state is saved.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 pub enum StartupError {
@@ -875,11 +877,26 @@ impl Browser {
     /// rendering contexts, and the window last.
     pub fn shutdown(mut self: Box<Self>) {
         info!("shutting down");
+        // The window goes away at once, like every browser: what follows is cleanup.
+        self.window.set_visible(false);
         let session = Session::capture(&self.tabs, true);
         if let Err(error) = session.save(&self.paths.session()) {
             error!(%error, "could not save the session");
         }
         self.save_all_state();
+
+        // Everything of ours is on disk now. Tearing Servo down waits for all its threads;
+        // a stuck one (seen with GStreamer media pipelines) would keep a windowless
+        // process alive forever. Give the engine time to write its own state (cookies,
+        // HSTS) and then leave regardless.
+        std::thread::Builder::new()
+            .name("shutdown-watchdog".into())
+            .spawn(|| {
+                std::thread::sleep(SHUTDOWN_GRACE);
+                warn!("engine shutdown did not finish in time; exiting anyway");
+                std::process::exit(0);
+            })
+            .ok();
 
         self.compat.close_all();
         self.views.clear();
