@@ -113,6 +113,10 @@ impl Browser {
                     tab.media_playing = playing;
                 }
             },
+            CompatEvent::Favicon { width, height, rgba } => {
+                let image = egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
+                self.gui_mut().set_favicon(id, image);
+            },
             CompatEvent::Command(command) => self.execute(command),
         }
         self.request_redraw();

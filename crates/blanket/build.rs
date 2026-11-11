@@ -34,6 +34,7 @@ fn main() {
     let logo = image::open(LOGO)
         .unwrap_or_else(|error| panic!("cannot read the application logo {LOGO}: {error}"))
         .to_rgba8();
+    let logo = trimmed(&logo);
     for size in RUNTIME_SIZES {
         let pixels = scaled(&logo, size);
         std::fs::write(out_dir.join(format!("icon-{size}.rgba")), pixels.as_raw()).expect("write icon");
@@ -105,6 +106,40 @@ fn copy_angle_next_to_executable(out_dir: &std::path::Path) {
         },
         None => println!("cargo:warning=ANGLE (libEGL.dll) not built yet; rebuild to place it next to blanket.exe"),
     }
+}
+
+/// Cut away the transparent margin around the artwork (keeping it square and centered,
+/// with a hairline of breathing room), so icons fill their slot in the taskbar and Start
+/// menu instead of showing a small mark inside a large empty square.
+fn trimmed(logo: &RgbaImage) -> RgbaImage {
+    let (width, height) = logo.dimensions();
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for (x, y, pixel) in logo.enumerate_pixels() {
+        if pixel[3] > 16 {
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x);
+            bottom = bottom.max(y);
+        }
+    }
+    if right <= left || bottom <= top {
+        return logo.clone();
+    }
+    let content = (right - left + 1).max(bottom - top + 1);
+    let side = content + content / 50; // ~2% padding
+    let center_x = (left + right) / 2;
+    let center_y = (top + bottom) / 2;
+    let mut square = RgbaImage::new(side, side);
+    for y in 0..side {
+        for x in 0..side {
+            let source_x = i64::from(center_x) - i64::from(side / 2) + i64::from(x);
+            let source_y = i64::from(center_y) - i64::from(side / 2) + i64::from(y);
+            if (0..i64::from(width)).contains(&source_x) && (0..i64::from(height)).contains(&source_y) {
+                square.put_pixel(x, y, *logo.get_pixel(source_x as u32, source_y as u32));
+            }
+        }
+    }
+    square
 }
 
 fn scaled(logo: &RgbaImage, size: u32) -> RgbaImage {

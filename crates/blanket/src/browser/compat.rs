@@ -44,6 +44,8 @@ pub enum CompatEvent {
     Fullscreen(bool),
     /// The page started or stopped playing audio (speaker icon on the tab).
     PlayingAudio(bool),
+    /// The page's icon, decoded to RGBA.
+    Favicon { width: u32, height: u32, rgba: Vec<u8> },
     /// A browser shortcut pressed while the page had keyboard focus.
     Command(UiCommand),
 }
@@ -56,6 +58,11 @@ struct CompatView {
     /// When the page context menu was last opened: a new window requested right after
     /// comes from "Open link in new tab/window" and opens in the background.
     context_menu_at: Rc<RefCell<Option<Instant>>>,
+    /// Back/forward availability, refreshed when the page's history changes. The chrome
+    /// reads it every frame; asking WebView2 each time would block the browser whenever
+    /// the page's process is busy.
+    navigation: Rc<std::cell::Cell<(bool, bool)>>,
+    zoom: std::cell::Cell<f32>,
     visible: bool,
     bounds: RECT,
 }
@@ -217,6 +224,7 @@ impl CompatHost {
             }
         }
         let context_menu_at = Rc::new(RefCell::new(None::<Instant>));
+        let navigation = Rc::new(std::cell::Cell::new((false, false)));
         let mut token = 0i64;
 
         let push = {
@@ -296,8 +304,15 @@ impl CompatHost {
             )?;
 
             let emit = push.clone();
+            let nav_state = navigation.clone();
             webview.add_HistoryChanged(
-                &HistoryChangedEventHandler::create(Box::new(move |_, _| {
+                &HistoryChangedEventHandler::create(Box::new(move |sender, _| {
+                    if let Some(webview) = sender.as_ref() {
+                        nav_state.set((
+                            read_bool(|out| webview.CanGoBack(out)),
+                            read_bool(|out| webview.CanGoForward(out)),
+                        ));
+                    }
                     emit(CompatEvent::HistoryChanged);
                     Ok(())
                 })),
@@ -315,6 +330,40 @@ impl CompatHost {
                 })),
                 &mut token,
             )?;
+
+            if let Ok(webview15) = webview.cast::<ICoreWebView2_15>() {
+                let emit = push.clone();
+                webview15.add_FaviconChanged(
+                    &FaviconChangedEventHandler::create(Box::new(move |sender, _| {
+                        let Some(webview) = sender.as_ref().and_then(|webview| webview.cast::<ICoreWebView2_15>().ok())
+                        else {
+                            return Ok(());
+                        };
+                        let emit = emit.clone();
+                        webview.GetFavicon(
+                            COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG,
+                            &GetFaviconCompletedHandler::create(Box::new(move |result, stream| {
+                                result?;
+                                let decoded = stream
+                                    .as_ref()
+                                    .and_then(read_stream)
+                                    .and_then(|png| image::load_from_memory_with_format(&png, image::ImageFormat::Png).ok());
+                                if let Some(icon) = decoded {
+                                    let icon = icon.to_rgba8();
+                                    emit(CompatEvent::Favicon {
+                                        width: icon.width(),
+                                        height: icon.height(),
+                                        rgba: icon.into_raw(),
+                                    });
+                                }
+                                Ok(())
+                            })),
+                        )?;
+                        Ok(())
+                    })),
+                    &mut token,
+                )?;
+            }
 
             if let Ok(webview8) = webview.cast::<ICoreWebView2_8>() {
                 let emit = push.clone();
@@ -397,6 +446,8 @@ impl CompatHost {
             controller,
             webview,
             context_menu_at,
+            navigation,
+            zoom: std::cell::Cell::new(1.0),
             visible: false,
             bounds: RECT::default(),
         })
@@ -481,27 +532,23 @@ impl CompatHost {
         }
     }
 
+    // These are read every frame by the chrome, so they come from cached state and never
+    // call into WebView2 (a busy page process would freeze the whole browser).
     pub fn can_go_back(&self, id: TabId) -> bool {
-        self.views
-            .get(&id)
-            .is_some_and(|view| read_bool(|out| unsafe { view.webview.CanGoBack(out) }))
+        self.views.get(&id).is_some_and(|view| view.navigation.get().0)
     }
 
     pub fn can_go_forward(&self, id: TabId) -> bool {
-        self.views
-            .get(&id)
-            .is_some_and(|view| read_bool(|out| unsafe { view.webview.CanGoForward(out) }))
+        self.views.get(&id).is_some_and(|view| view.navigation.get().1)
     }
 
     pub fn zoom(&self, id: TabId) -> Option<f32> {
-        let view = self.views.get(&id)?;
-        let mut zoom = 1.0f64;
-        unsafe { view.controller.ZoomFactor(&mut zoom).ok()? };
-        Some(zoom as f32)
+        self.views.get(&id).map(|view| view.zoom.get())
     }
 
     pub fn set_zoom(&self, id: TabId, zoom: f32) {
         if let Some(view) = self.views.get(&id) {
+            view.zoom.set(zoom);
             unsafe {
                 let _ = view.controller.SetZoomFactor(f64::from(zoom));
             }
@@ -557,6 +604,27 @@ fn is_sign_in_page(url: &Url) -> bool {
         let host = host.to_ascii_lowercase();
         SIGN_IN_HOSTS.contains(&host.as_str())
     })
+}
+
+/// Read a whole COM stream (favicons are small; anything over 1 MiB is refused).
+fn read_stream(stream: &windows::Win32::System::Com::IStream) -> Option<Vec<u8>> {
+    let mut data = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let mut read = 0u32;
+        // SAFETY: `chunk` is valid for `chunk.len()` bytes and `read` receives the count.
+        let result = unsafe { stream.Read(chunk.as_mut_ptr().cast(), chunk.len() as u32, Some(&mut read)) };
+        if result.is_err() {
+            return None;
+        }
+        if read == 0 {
+            return Some(data);
+        }
+        data.extend_from_slice(&chunk[..read as usize]);
+        if data.len() > 1024 * 1024 {
+            return None;
+        }
+    }
 }
 
 fn rect_eq(a: &RECT, b: &RECT) -> bool {

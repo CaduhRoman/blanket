@@ -69,7 +69,7 @@ winresource = "0.1"
 [target.'cfg(windows)'.dependencies]
 # Compatibility mode (sites that need MSE/DRM) runs on the system WebView2 runtime.
 webview2-com = "0.39.1"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_System_Com"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
