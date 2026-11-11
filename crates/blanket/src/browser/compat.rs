@@ -44,6 +44,15 @@ pub enum CompatEvent {
     Fullscreen(bool),
     /// The page started or stopped playing audio (speaker icon on the tab).
     PlayingAudio(bool),
+    /// The page opened a window (`window.open`, `target=_blank`): it becomes a new tab
+    /// attached to the request, keeping `window.opener`.
+    Popup {
+        url: Option<Url>,
+        args: ICoreWebView2NewWindowRequestedEventArgs,
+        deferral: ICoreWebView2Deferral,
+    },
+    /// The page called `window.close()`.
+    CloseRequested,
     /// The page's icon, decoded to RGBA.
     Favicon { width: u32, height: u32, rgba: Vec<u8> },
     /// A browser shortcut pressed while the page had keyboard focus.
@@ -176,8 +185,69 @@ impl CompatHost {
     /// Create the compatibility view of tab `id`, loading `url`. Starts hidden.
     pub fn create(&mut self, id: TabId, url: &Url, dark: bool) -> bool {
         self.close(id);
-        let Some(environment) = self.environment() else {
+        let Some(controller) = self.new_controller(id) else {
             return false;
+        };
+        match self.wire(id, controller, Some(url), dark) {
+            Ok(view) => {
+                debug!(tab = %id, %url, "compatibility view created");
+                self.views.insert(id, view);
+                true
+            },
+            Err(error) => {
+                warn!(%error, tab = %id, "could not set up a compatibility view");
+                false
+            },
+        }
+    }
+
+    /// Give tab `id` the window a page asked for with `window.open` (sign-in popups).
+    /// Handing WebView2 our view through `SetNewWindow` keeps `window.opener`, which the
+    /// sign-in flow needs to report back to the page that opened it; opening the URL in an
+    /// unrelated tab would finish the login and never tell the site.
+    pub fn create_popup(
+        &mut self,
+        id: TabId,
+        args: &ICoreWebView2NewWindowRequestedEventArgs,
+        deferral: &ICoreWebView2Deferral,
+        dark: bool,
+    ) -> bool {
+        self.close(id);
+        let created = self.new_controller(id).and_then(|controller| match self.wire(id, controller, None, dark) {
+            Ok(view) => Some(view),
+            Err(error) => {
+                warn!(%error, tab = %id, "could not set up a popup view");
+                None
+            },
+        });
+        let attached = created.and_then(|view| {
+            // SAFETY: COM calls on the UI thread that owns both views.
+            let result = unsafe { args.SetNewWindow(&view.webview) };
+            match result {
+                Ok(()) => Some(view),
+                Err(error) => {
+                    warn!(%error, tab = %id, "could not attach the popup");
+                    None
+                },
+            }
+        });
+        // SAFETY: completing the deferral taken in NewWindowRequested, on the UI thread.
+        unsafe {
+            let _ = deferral.Complete();
+        }
+        match attached {
+            Some(view) => {
+                debug!(tab = %id, "popup opened in a compatibility tab");
+                self.views.insert(id, view);
+                true
+            },
+            None => false,
+        }
+    }
+
+    fn new_controller(&mut self, id: TabId) -> Option<ICoreWebView2Controller> {
+        let Some(environment) = self.environment() else {
+            return None;
         };
         let parent = self.parent;
         let (tx, rx) = mpsc::channel();
@@ -193,30 +263,27 @@ impl CompatHost {
                 Ok(())
             }),
         );
-        let controller = match created
+        match created
             .map_err(|error| format!("{error:?}"))
             .and_then(|()| rx.recv().map_err(|error| error.to_string())?.map_err(|error| error.to_string()))
         {
-            Ok(controller) => controller,
+            Ok(controller) => Some(controller),
             Err(error) => {
                 warn!(%error, tab = %id, "could not create a compatibility view");
-                return false;
-            },
-        };
-        match self.wire(id, controller, url, dark) {
-            Ok(view) => {
-                debug!(tab = %id, %url, "compatibility view created");
-                self.views.insert(id, view);
-                true
-            },
-            Err(error) => {
-                warn!(%error, tab = %id, "could not set up a compatibility view");
-                false
+                None
             },
         }
     }
 
-    fn wire(&self, id: TabId, controller: ICoreWebView2Controller, url: &Url, dark: bool) -> windows::core::Result<CompatView> {
+    /// Hook a new view's events to tab `id`; navigate to `url` unless the view will be
+    /// handed to a popup request (which navigates it itself).
+    fn wire(
+        &self,
+        id: TabId,
+        controller: ICoreWebView2Controller,
+        url: Option<&Url>,
+        dark: bool,
+    ) -> windows::core::Result<CompatView> {
         let webview = unsafe { controller.CoreWebView2()? };
         unsafe {
             controller.SetIsVisible(false)?;
@@ -407,18 +474,26 @@ impl CompatHost {
                     let Some(args) = args else {
                         return Ok(());
                     };
-                    args.SetHandled(true)?;
-                    let Some(url) = read_string(|out| args.Uri(out)).and_then(|uri| Url::parse(&uri).ok()) else {
-                        return Ok(());
-                    };
-                    // "Open link in new tab" from the context menu never steals focus.
+                    let url = read_string(|out| args.Uri(out)).and_then(|uri| Url::parse(&uri).ok());
+                    // "Open link in new tab" from the context menu: a plain background tab.
                     let from_menu = menu_at
                         .borrow_mut()
                         .take()
                         .is_some_and(|at| at.elapsed() < Duration::from_secs(30));
-                    emit(CompatEvent::OpenNewTab {
+                    if from_menu {
+                        args.SetHandled(true)?;
+                        if let Some(url) = url {
+                            emit(CompatEvent::OpenNewTab { url, background: true });
+                        }
+                        return Ok(());
+                    }
+                    // window.open / target=_blank: the new tab must be this window, so the
+                    // page keeps its opener (sign-in popups report back through it).
+                    let deferral = args.GetDeferral()?;
+                    emit(CompatEvent::Popup {
                         url,
-                        background: from_menu,
+                        args: args.clone(),
+                        deferral,
                     });
                     Ok(())
                 })),
@@ -447,8 +522,20 @@ impl CompatHost {
                 &mut token,
             )?;
 
-            let target = CoTaskMemPWSTR::from(url.as_str());
-            webview.Navigate(*target.as_ref().as_pcwstr())?;
+            let emit = push.clone();
+            webview.add_WindowCloseRequested(
+                &WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
+                    // window.close(), e.g. a sign-in popup that finished.
+                    emit(CompatEvent::CloseRequested);
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+
+            if let Some(url) = url {
+                let target = CoTaskMemPWSTR::from(url.as_str());
+                webview.Navigate(*target.as_ref().as_pcwstr())?;
+            }
         }
 
         Ok(CompatView {

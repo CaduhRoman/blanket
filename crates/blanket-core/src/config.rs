@@ -34,7 +34,19 @@ pub struct CompatConfig {
     pub enabled: bool,
     /// Registrable domains; subdomains match too ("youtube.com" covers "m.youtube.com").
     pub domains: Vec<String>,
+    /// Which default list `domains` was last brought up to; sites added to the defaults
+    /// later are appended to saved lists once (see [`COMPAT_DEFAULTS_ADDED`]).
+    #[serde(default)]
+    pub defaults_version: u32,
 }
+
+/// Sites added to the default list after the first release, by defaults version.
+pub const COMPAT_DEFAULTS_ADDED: &[(u32, &[&str])] = &[
+    // X: Google sign-in (an Identity Services iframe) does not run on Servo.
+    (2, &["x.com", "twitter.com"]),
+];
+
+pub const COMPAT_DEFAULTS_VERSION: u32 = 2;
 
 pub const DEFAULT_COMPAT_DOMAINS: &[&str] = &[
     "youtube.com",
@@ -51,6 +63,8 @@ pub const DEFAULT_COMPAT_DOMAINS: &[&str] = &[
     "vimeo.com",
     "open.spotify.com",
     "tiktok.com",
+    "x.com",
+    "twitter.com",
 ];
 
 impl Default for CompatConfig {
@@ -58,6 +72,7 @@ impl Default for CompatConfig {
         Self {
             enabled: true,
             domains: DEFAULT_COMPAT_DOMAINS.iter().map(|domain| (*domain).to_owned()).collect(),
+            defaults_version: COMPAT_DEFAULTS_VERSION,
         }
     }
 }
@@ -293,7 +308,8 @@ impl BlanketConfig {
                     path: path.to_owned(),
                     message: error.to_string(),
                 })?;
-                let migrated = config.memory.policy_version < MEMORY_POLICY_VERSION;
+                let migrated = config.memory.policy_version < MEMORY_POLICY_VERSION ||
+                    config.compat.defaults_version < COMPAT_DEFAULTS_VERSION;
                 let config = config.validated();
                 if migrated {
                     if let Err(error) = config.save(path) {
@@ -328,6 +344,18 @@ impl BlanketConfig {
     /// file must never be able to make the browser suspend the tab being read or spin the
     /// CPU.
     pub fn validated(mut self) -> Self {
+        let compat = &mut self.compat;
+        for (version, added) in COMPAT_DEFAULTS_ADDED {
+            if compat.defaults_version < *version {
+                for domain in *added {
+                    if !compat.domains.iter().any(|existing| existing.eq_ignore_ascii_case(domain)) {
+                        compat.domains.push((*domain).to_owned());
+                    }
+                }
+            }
+        }
+        compat.defaults_version = compat.defaults_version.max(COMPAT_DEFAULTS_VERSION);
+
         let memory = &mut self.memory;
         if memory.policy_version < MEMORY_POLICY_VERSION {
             // The old policy released tabs after a minute of disuse on machines with a
@@ -376,6 +404,21 @@ mod tests {
         assert!(!compat.applies_to(&url("blanket:newtab")));
         compat.enabled = false;
         assert!(!compat.applies_to(&url("https://www.youtube.com/")));
+    }
+
+    #[test]
+    fn saved_compat_lists_receive_sites_added_to_the_defaults() {
+        let old = "[compat]\nenabled = true\ndomains = [\"youtube.com\", \"my-site.example\"]\n";
+        let config = toml::from_str::<BlanketConfig>(old).unwrap().validated();
+        let domains = &config.compat.domains;
+        assert!(domains.contains(&"my-site.example".to_owned()), "user entries kept");
+        assert!(domains.contains(&"x.com".to_owned()) && domains.contains(&"twitter.com".to_owned()));
+        assert_eq!(config.compat.defaults_version, COMPAT_DEFAULTS_VERSION);
+        // Once up to date, a site the user removed is not added back.
+        let mut current = config.clone();
+        current.compat.domains.retain(|domain| domain != "x.com");
+        let again = current.validated();
+        assert!(!again.compat.domains.contains(&"x.com".to_owned()));
     }
 
     #[test]

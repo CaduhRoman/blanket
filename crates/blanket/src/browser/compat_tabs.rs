@@ -1,8 +1,10 @@
 //! Compatibility tabs in the browser: choosing the engine per URL and applying the events
 //! of WebView2 tabs to browser state, like `servo_events` does for Servo tabs.
 
+use std::time::Instant;
+
 use blanket_core::ids::TabId;
-use blanket_core::tabs::TabLifecycle;
+use blanket_core::tabs::{OpenPosition, TabLifecycle};
 use blanket_core::time::unix_now;
 use tracing::{debug, info};
 use url::Url;
@@ -102,6 +104,24 @@ impl Browser {
                 self.open_url(url, disposition, false);
             },
             CompatEvent::LeaveCompat(url) => self.load_in_tab(id, url, false),
+            #[cfg(windows)]
+            CompatEvent::Popup { url, args, deferral } => {
+                let previous = self.tabs.active_id();
+                let popup = self.tabs.open(url, OpenPosition::AfterActive, true, Instant::now());
+                let dark = crate::ui::theme::is_dark(self.config.ui.theme, self.window.theme());
+                if self.compat.create_popup(popup, &args, &deferral, dark) {
+                    self.tabs.set_lifecycle(popup, TabLifecycle::Live);
+                    if let Some(tab) = self.tabs.get_mut(popup) {
+                        tab.loading = true;
+                    }
+                    self.show_active(previous, popup);
+                    self.session_dirty = true;
+                } else {
+                    // WebView2 falls back to its own popup window; drop the empty tab.
+                    self.close_tab(popup);
+                }
+            },
+            CompatEvent::CloseRequested => self.close_tab(id),
             CompatEvent::Fullscreen(fullscreen) => {
                 if is_active {
                     self.set_content_fullscreen(fullscreen);

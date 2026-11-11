@@ -22,6 +22,7 @@ pub enum CompatEvent {
     LeaveCompat(Url),
     Fullscreen(bool),
     PlayingAudio(bool),
+    CloseRequested,
     Favicon { width: u32, height: u32, rgba: Vec<u8> },
     Command(UiCommand),
 }
