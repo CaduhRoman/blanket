@@ -63,6 +63,12 @@ struct CompatView {
     /// the page's process is busy.
     navigation: Rc<std::cell::Cell<(bool, bool)>>,
     zoom: std::cell::Cell<f32>,
+    /// The page is playing audio; such a tab is never frozen.
+    playing: Rc<std::cell::Cell<bool>>,
+    /// When the view was last hidden (it is in a background tab).
+    hidden_since: Option<Instant>,
+    /// Frozen with `TrySuspend`: no CPU or timers until shown again; nothing reloads.
+    suspended: bool,
     visible: bool,
     bounds: RECT,
 }
@@ -225,6 +231,7 @@ impl CompatHost {
         }
         let context_menu_at = Rc::new(RefCell::new(None::<Instant>));
         let navigation = Rc::new(std::cell::Cell::new((false, false)));
+        let playing = Rc::new(std::cell::Cell::new(false));
         let mut token = 0i64;
 
         let push = {
@@ -367,12 +374,14 @@ impl CompatHost {
 
             if let Ok(webview8) = webview.cast::<ICoreWebView2_8>() {
                 let emit = push.clone();
+                let playing_flag = playing.clone();
                 webview8.add_IsDocumentPlayingAudioChanged(
                     &IsDocumentPlayingAudioChangedEventHandler::create(Box::new(move |sender, _| {
                         let playing = sender
                             .as_ref()
                             .and_then(|webview| webview.cast::<ICoreWebView2_8>().ok())
                             .is_some_and(|webview| read_bool(|out| webview.IsDocumentPlayingAudio(out)));
+                        playing_flag.set(playing);
                         emit(CompatEvent::PlayingAudio(playing));
                         Ok(())
                     })),
@@ -448,6 +457,9 @@ impl CompatHost {
             context_menu_at,
             navigation,
             zoom: std::cell::Cell::new(1.0),
+            playing,
+            hidden_since: Some(Instant::now()),
+            suspended: false,
             visible: false,
             bounds: RECT::default(),
         })
@@ -490,11 +502,40 @@ impl CompatHost {
                     }
                 }
             }
+            if show && view.suspended {
+                view.suspended = false;
+                if let Ok(webview3) = view.webview.cast::<ICoreWebView2_3>() {
+                    unsafe {
+                        let _ = webview3.Resume();
+                    }
+                }
+            }
             if show != view.visible {
                 view.visible = show;
+                view.hidden_since = (!show).then(Instant::now);
                 unsafe {
                     let _ = view.controller.SetIsVisible(show);
                 }
+            }
+        }
+    }
+
+    /// Freeze background compatibility tabs hidden for at least `after` and not playing
+    /// audio, like Chrome does with background tabs: they stop using CPU and timers, keep
+    /// their page as it was (nothing reloads) and wake instantly when shown.
+    pub fn freeze_background(&mut self, after: Duration) {
+        for view in self.views.values_mut() {
+            let idle = view.hidden_since.is_some_and(|since| since.elapsed() >= after);
+            if view.visible || view.suspended || view.playing.get() || !idle {
+                continue;
+            }
+            let Ok(webview3) = view.webview.cast::<ICoreWebView2_3>() else {
+                continue;
+            };
+            let handler = TrySuspendCompletedHandler::create(Box::new(|_, _| Ok(())));
+            // SAFETY: COM call on the UI thread that owns the view.
+            if unsafe { webview3.TrySuspend(&handler) }.is_ok() {
+                view.suspended = true;
             }
         }
     }

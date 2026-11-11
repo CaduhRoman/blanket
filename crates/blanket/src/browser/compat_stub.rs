@@ -65,4 +65,5 @@ impl CompatHost {
     pub fn set_zoom(&self, _: TabId, _: f32) {}
     pub fn focus(&self, _: TabId) {}
     pub fn release_focus(&self) {}
+    pub fn freeze_background(&mut self, _: std::time::Duration) {}
 }

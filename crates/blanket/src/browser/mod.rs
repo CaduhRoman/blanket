@@ -133,6 +133,9 @@ pub struct Browser {
     compat: compat::CompatHost,
     /// Compatibility tabs whose current navigation was typed by the user.
     compat_typed: HashSet<TabId>,
+    /// A compatibility tab to create once the window has shown its first frame: starting
+    /// WebView2 takes about a second and must not delay the window appearing.
+    deferred_compat: Option<(TabId, Url)>,
     newtab: NewTabData,
 
     waker: Waker,
@@ -262,6 +265,7 @@ impl Browser {
             net: NetService::new(waker.as_net_waker()),
             compat,
             compat_typed: HashSet::new(),
+            deferred_compat: None,
             newtab,
             waker,
             pacer: FramePacer::new(Duration::from_millis(config.scheduler.animation_frame_interval_ms)),
@@ -544,6 +548,15 @@ impl Browser {
             let ms = self.metrics.elapsed_ms(now);
             info!(startup_ms = format!("{ms:.0}"), "first frame presented");
             self.metrics.record("first_frame", serde_json::Value::Null);
+            // The window is up: now start the compatibility tab that was restored.
+            if let Some((id, url)) = self.deferred_compat.take() {
+                if self.tabs.get(id).is_some() {
+                    self.create_view(id, url, true);
+                    if self.tabs.active_id() == Some(id) {
+                        self.show_active(None, id);
+                    }
+                }
+            }
         }
         for command in commands {
             self.execute(command);

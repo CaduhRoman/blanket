@@ -305,7 +305,24 @@ impl Gui {
     /// Chrome drawn over the content area right now (menu, address suggestions, a
     /// dialog). Native compatibility views would hide it, so they step aside meanwhile.
     pub fn covers_content(&self) -> bool {
-        self.location.overlay_open() || self.dialogs.captures_input(self.active_tab)
+        if self.location.overlay_open() || self.dialogs.captures_input(self.active_tab) {
+            return true;
+        }
+        // Any other floating chrome (tab hover cards, tooltips, context menus, pickers)
+        // reaching into the content area. The status text, toasts and performance overlay
+        // are left out: they come and go often, and hiding the page for them would flicker.
+        let content = self.content_rect;
+        if !content.is_positive() {
+            return false;
+        }
+        let ignored = [egui::Id::new("toasts"), egui::Id::new("status-text"), egui::Id::new("perf-hud")];
+        self.ctx().memory(|memory| {
+            memory.areas().visible_layer_ids().into_iter().any(|layer| {
+                layer.order != Order::Background &&
+                    !ignored.contains(&layer.id) &&
+                    memory.area_rect(layer.id).is_some_and(|rect| rect.intersects(content))
+            })
+        })
     }
 
     pub fn content_origin(&self) -> Pos2 {
@@ -364,6 +381,9 @@ impl Gui {
     }
 
     pub fn set_favicon(&mut self, id: TabId, image: ColorImage) {
+        // Icons are drawn at 16 px; sites often send 192–256 px images. Store at most
+        // 32 px (sharp on HiDPI) so every tab's icon fits in the cache budget.
+        let image = downscale(image, FAVICON_SIDE);
         let texture = self.ctx().load_texture(format!("favicon-{id}"), image, TextureOptions::LINEAR);
         self.favicons.insert(id, Texture(texture));
     }
@@ -410,8 +430,9 @@ impl Gui {
     }
 
     /// Release part of the chrome's caches under memory pressure.
+    /// Under memory pressure only tab preview thumbnails go: favicons are a few KiB each
+    /// and dropping them left tabs with a generic globe until the page reloaded.
     pub fn trim_caches(&mut self, keep_fraction: f64) {
-        self.favicons.trim(keep_fraction);
         self.thumbnails.trim(keep_fraction);
     }
 
@@ -702,6 +723,45 @@ fn show_overlays(
     }
 }
 
+const FAVICON_SIDE: usize = 32;
+
+/// Shrink `image` so neither side exceeds `max` (box filter in premultiplied space, which
+/// keeps transparent edges clean). Smaller images are returned unchanged.
+fn downscale(image: ColorImage, max: usize) -> ColorImage {
+    let [width, height] = image.size;
+    if width <= max && height <= max {
+        return image;
+    }
+    let scale = (width.max(height) as f32 / max as f32).max(1.0);
+    let out_w = ((width as f32 / scale).round() as usize).max(1);
+    let out_h = ((height as f32 / scale).round() as usize).max(1);
+    let mut pixels = Vec::with_capacity(out_w * out_h);
+    for y in 0..out_h {
+        let (y0, y1) = (y * height / out_h, ((y + 1) * height / out_h).max(y * height / out_h + 1));
+        for x in 0..out_w {
+            let (x0, x1) = (x * width / out_w, ((x + 1) * width / out_w).max(x * width / out_w + 1));
+            let mut sum = [0u32; 4];
+            for sy in y0..y1.min(height) {
+                for sx in x0..x1.min(width) {
+                    let pixel = image.pixels[sy * width + sx];
+                    sum[0] += u32::from(pixel.r());
+                    sum[1] += u32::from(pixel.g());
+                    sum[2] += u32::from(pixel.b());
+                    sum[3] += u32::from(pixel.a());
+                }
+            }
+            let count = ((y1.min(height) - y0) * (x1.min(width) - x0)).max(1) as u32;
+            pixels.push(Color32::from_rgba_premultiplied(
+                (sum[0] / count) as u8,
+                (sum[1] / count) as u8,
+                (sum[2] / count) as u8,
+                (sum[3] / count) as u8,
+            ));
+        }
+    }
+    ColorImage::new([out_w, out_h], pixels)
+}
+
 /// Convert an engine image (favicons) into an egui image.
 pub fn to_color_image(image: &Image) -> ColorImage {
     let size = [image.width as usize, image.height as usize];
@@ -733,4 +793,19 @@ pub fn to_color_image(image: &Image) -> ColorImage {
     }
     rgba.resize(pixels * 4, 0);
     ColorImage::from_rgba_unmultiplied(size, &rgba)
+}
+
+#[cfg(test)]
+mod favicon_tests {
+    use super::*;
+
+    #[test]
+    fn large_favicons_are_downscaled_and_small_ones_kept() {
+        let big = ColorImage::new([256, 128], vec![Color32::from_rgb(200, 10, 10); 256 * 128]);
+        let small = downscale(big, FAVICON_SIDE);
+        assert_eq!(small.size, [32, 16]);
+        assert_eq!(small.pixels[0], Color32::from_rgb(200, 10, 10));
+        let tiny = ColorImage::new([16, 16], vec![Color32::WHITE; 256]);
+        assert_eq!(downscale(tiny, FAVICON_SIDE).size, [16, 16]);
+    }
 }

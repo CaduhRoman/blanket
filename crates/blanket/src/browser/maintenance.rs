@@ -89,6 +89,11 @@ impl Browser {
 
     pub(super) fn sample_resources(&mut self) {
         let now = Instant::now();
+        // Compatibility tabs in the background for a few minutes are frozen (not
+        // reloaded), so a dozen YouTube tabs do not keep spending CPU.
+        if self.config.memory.suspension_enabled {
+            self.compat.freeze_background(Duration::from_secs(5 * 60));
+        }
         let memory = self.monitor.memory();
         let process = self.monitor.process();
         self.perf.last_sample = Some(now);

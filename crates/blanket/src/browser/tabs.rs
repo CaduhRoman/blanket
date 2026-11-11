@@ -19,8 +19,19 @@ impl Browser {
     /// Create (or recreate) the web view for `id`, loading `url`. The view starts hidden.
     pub(super) fn create_view(&mut self, id: TabId, url: Url, user_initiated: bool) {
         // Sites Servo cannot run yet open in compatibility mode, automatically.
-        if self.wants_compat(&url) && self.create_compat_view(id, &url) {
-            return;
+        if self.wants_compat(&url) {
+            if !self.first_frame_recorded {
+                // Show the window first; the view is created right after the first frame.
+                self.deferred_compat = Some((id, url));
+                self.tabs.set_lifecycle(id, TabLifecycle::Live);
+                if let Some(tab) = self.tabs.get_mut(id) {
+                    tab.loading = true;
+                }
+                return;
+            }
+            if self.create_compat_view(id, &url) {
+                return;
+            }
         }
         self.compat.close(id);
         let Some(servo) = &self.servo else {
