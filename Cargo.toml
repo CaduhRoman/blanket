@@ -9,7 +9,7 @@ members = [
 default-members = ["crates/blanket-core", "crates/blanket-net", "crates/blanket-bench"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MPL-2.0"
 authors = ["Carlos"]

@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "blanket"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blanket-core",
  "blanket-net",
@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-bench"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "serde",
@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs",
  "serde",
@@ -641,7 +641,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-net"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blanket-core",
  "crossbeam-channel",
