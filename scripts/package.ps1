@@ -1,4 +1,6 @@
-# Builds a portable Windows package of Blanket: dist\Blanket-<version>-windows-x64.zip
+# Builds the Windows downloads of Blanket: dist\Blanket-setup.exe (installer) and
+# dist\Blanket-windows-x64.zip (portable). The names are stable on purpose: the website
+# links to https://github.com/CaduhRoman/blanket/releases/latest/download/<name>.
 #
 # The zip holds blanket.exe plus the GStreamer runtime it needs for audio/video in Servo
 # tabs: the GStreamer DLLs and the plugins Servo loads from the executable's folder
@@ -74,7 +76,9 @@ if ($missing) { Write-Warning "GStreamer plugins not found (skipped): $($missing
 
 Copy-Item README.md, LICENSE* $stage -ErrorAction SilentlyContinue
 
-$zip = Join-Path $repo "dist\$name.zip"
+# Stable file names: the website links to releases/latest/download/<name>, which must
+# not change between versions (the version is in the release tag and the installer).
+$zip = Join-Path $repo "dist\Blanket-windows-x64.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path "$stage\*" -DestinationPath $zip -CompressionLevel Optimal
 $size = "{0:N0} MB" -f ((Get-Item $zip).Length / 1MB)
@@ -82,7 +86,7 @@ $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
 Write-Host "Package: $zip ($size)"
 Write-Host "SHA256:  $hash"
 
-# Installer (Inno Setup 6): dist\Blanket-<version>-setup.exe
+# Installer (Inno Setup 6): dist\Blanket-setup.exe
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) {
@@ -92,6 +96,6 @@ if (-not $iscc) {
 $icon = Get-ChildItem target\release\build -Recurse -Filter blanket.ico | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 & $iscc /Qp "/DAppVersion=$version" "/DSourceDir=$stage" "/DIconFile=$($icon.FullName)" "/O$(Join-Path $repo 'dist')" packaging\installer\blanket.iss
 if ($LASTEXITCODE -ne 0) { throw "installer build failed" }
-$setup = Join-Path $repo "dist\Blanket-$version-setup.exe"
+$setup = Join-Path $repo "dist\Blanket-setup.exe"
 Write-Host ("Setup:   $setup ({0:N0} MB)" -f ((Get-Item $setup).Length / 1MB))
 Write-Host "SHA256:  $((Get-FileHash $setup -Algorithm SHA256).Hash)"
