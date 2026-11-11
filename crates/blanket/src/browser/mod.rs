@@ -135,6 +135,8 @@ pub struct Browser {
     compat: compat::CompatHost,
     /// Compatibility tabs whose current navigation was typed by the user.
     compat_typed: HashSet<TabId>,
+    /// URLs (or "a new tab") sent by later launches of Blanket on this profile.
+    instance_inbox: std::sync::Arc<std::sync::Mutex<Vec<crate::single_instance::OpenRequest>>>,
     /// A compatibility tab to create once the window has shown its first frame: starting
     /// WebView2 takes about a second and must not delay the window appearing.
     deferred_compat: Option<(TabId, Url)>,
@@ -173,6 +175,7 @@ impl Browser {
             urls,
             restore_session,
             metrics,
+            instance,
         } = options;
 
         // No system title bar: the tab strip is the title bar, with its own window
@@ -229,6 +232,12 @@ impl Browser {
         let delegate = Delegate::new();
         let scale = Scale::new(window.scale_factor() as f32);
         delegate.set_creation_context(offscreen.clone(), scale);
+        // Later launches of Blanket on this profile hand their URLs to this process.
+        let instance_inbox = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        instance.serve(instance_inbox.clone(), {
+            let waker = waker.clone();
+            move || waker.wake()
+        });
         let compat = compat::CompatHost::for_window(&window, paths.root(), config.compat.clone(), {
             let waker = waker.clone();
             Rc::new(move || waker.wake())
@@ -267,6 +276,7 @@ impl Browser {
             net: NetService::new(waker.as_net_waker()),
             compat,
             compat_typed: HashSet::new(),
+            instance_inbox,
             deferred_compat: None,
             newtab,
             waker,
@@ -417,6 +427,7 @@ impl Browser {
         }
         self.process_servo_events();
         self.process_compat_events();
+        self.process_instance_requests();
         self.drain_async_results();
         self.process_download_events();
         self.poll_file_dialogs();
@@ -723,6 +734,28 @@ impl Browser {
             },
             UiCommand::Quit => self.exit_requested = true,
         }
+        self.request_redraw();
+    }
+
+    /// Another launch of Blanket asked for URLs (or just a new tab): open them here and
+    /// bring the window forward, instead of a second browser on the same profile.
+    fn process_instance_requests(&mut self) {
+        let requests = std::mem::take(&mut *self.instance_inbox.lock().unwrap_or_else(|poison| poison.into_inner()));
+        if requests.is_empty() {
+            return;
+        }
+        for urls in requests {
+            if urls.is_empty() {
+                self.execute(UiCommand::NewTab);
+            }
+            for input in urls {
+                self.navigate_input(&input, Disposition::NewTab);
+            }
+        }
+        if self.window.is_minimized() == Some(true) {
+            self.window.set_minimized(false);
+        }
+        self.window.focus_window();
         self.request_redraw();
     }
 

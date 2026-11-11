@@ -14,6 +14,7 @@ mod logging;
 mod runtime_files;
 mod metrics;
 mod protocol;
+mod single_instance;
 mod ui;
 
 use std::process::ExitCode;
@@ -42,6 +43,11 @@ fn main() -> ExitCode {
         },
     };
     let _log_guard = logging::init(&paths, cli.log_json);
+    // One browser per profile: a second launch hands its URLs to the running one.
+    let instance = match single_instance::acquire(paths.root(), &cli.urls) {
+        single_instance::Instance::Primary(primary) => primary,
+        single_instance::Instance::Forwarded => return ExitCode::SUCCESS,
+    };
     // ANGLE and (with audio/video) the delay-loaded GStreamer must be findable first.
     #[cfg(windows)]
     if !runtime_files::prepare() {
@@ -78,6 +84,7 @@ fn main() -> ExitCode {
         urls: cli.urls,
         restore_session: !cli.no_restore,
         metrics,
+        instance,
     };
     let mut app = App::new(&event_loop, options);
     if let Err(error) = event_loop.run_app(&mut app) {

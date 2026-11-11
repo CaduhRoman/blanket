@@ -20,6 +20,8 @@ pub struct StartupOptions {
     pub urls: Vec<String>,
     pub restore_session: bool,
     pub metrics: Metrics,
+    /// This process owns the profile; it serves later launches once running.
+    pub instance: crate::single_instance::Primary,
 }
 
 enum State {
