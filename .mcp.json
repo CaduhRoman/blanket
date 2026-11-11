@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agent-desktop": {
+      "type": "stdio",
+      "command": "agent-desktop",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}
