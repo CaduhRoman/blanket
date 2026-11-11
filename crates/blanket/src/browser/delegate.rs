@@ -189,6 +189,14 @@ impl WebViewDelegate for Delegate {
             return;
         }
         // Links into sites that need compatibility mode continue there, in the same tab.
+        // Only the URL is handed over, so this is only correct for GETs; a POST (a form
+        // submission, a sign-in callback) would arrive in WebView2 without its body.
+        // Servo 0.8's `NavigationRequest` exposes nothing but `url` (the method and body
+        // stay in the constellation's private load data), so the method cannot be checked
+        // here. What keeps sign-in flows on one engine instead is that Google's account
+        // hosts are themselves compatibility domains (config `COMPAT_DEFAULTS_ADDED`, v3):
+        // the flow starts in WebView2 and never reaches this point mid-way. Check again
+        // when Servo is upgraded: if the request gains a method, divert only GETs.
         if self.compat.borrow().as_ref().is_some_and(|compat| compat.applies_to(&navigation_request.url)) {
             let url = navigation_request.url.clone();
             navigation_request.deny();

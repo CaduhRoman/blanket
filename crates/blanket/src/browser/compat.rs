@@ -345,6 +345,13 @@ impl CompatHost {
                     let target = read_string(|out| args.Uri(out)).and_then(|uri| Url::parse(&uri).ok());
                     let user_initiated = read_bool(|out| args.IsUserInitiated(out));
                     let redirected = read_bool(|out| args.IsRedirected(out));
+                    // A navigation with a body (a form POST, e.g. a sign-in callback) cannot
+                    // move to Servo: only the URL crosses engines, so the body would be lost
+                    // and the target would see a bare GET. WebView2 lists the body's
+                    // Content-Type among the request headers; GETs have none.
+                    let has_body = args.RequestHeaders().is_ok_and(|headers| {
+                        read_bool(|out| headers.Contains(windows::core::w!("Content-Type"), out))
+                    });
                     // Links the user follows to an ordinary site go back to Servo. Redirects
                     // (sign-in flows, consent pages) stay here.
                     // Sign-in pages stay too: logging in on YouTube goes through
@@ -352,6 +359,7 @@ impl CompatHost {
                     if let Some(target) = target {
                         if user_initiated &&
                             !redirected &&
+                            !has_body &&
                             matches!(target.scheme(), "http" | "https") &&
                             !config.borrow().applies_to(&target) &&
                             !is_sign_in_page(&target)
