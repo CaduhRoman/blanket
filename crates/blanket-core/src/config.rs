@@ -44,9 +44,14 @@ pub struct CompatConfig {
 pub const COMPAT_DEFAULTS_ADDED: &[(u32, &[&str])] = &[
     // X: Google sign-in (an Identity Services iframe) does not run on Servo.
     (2, &["x.com", "twitter.com"]),
+    // Google accounts: the session must live in the engine that uses it (YouTube, X's
+    // "Continue with Google"). Signing in on Servo left WebView2 without the cookies, and
+    // a flow that started on Servo was torn across engines mid-way (400 on SetSID).
+    // Only the account hosts: plain google.com (search) stays on Servo.
+    (3, &["accounts.google.com", "myaccount.google.com", "mail.google.com"]),
 ];
 
-pub const COMPAT_DEFAULTS_VERSION: u32 = 2;
+pub const COMPAT_DEFAULTS_VERSION: u32 = 3;
 
 pub const DEFAULT_COMPAT_DOMAINS: &[&str] = &[
     "youtube.com",
@@ -65,6 +70,9 @@ pub const DEFAULT_COMPAT_DOMAINS: &[&str] = &[
     "tiktok.com",
     "x.com",
     "twitter.com",
+    "accounts.google.com",
+    "myaccount.google.com",
+    "mail.google.com",
 ];
 
 impl Default for CompatConfig {
@@ -419,6 +427,35 @@ mod tests {
         current.compat.domains.retain(|domain| domain != "x.com");
         let again = current.validated();
         assert!(!again.compat.domains.contains(&"x.com".to_owned()));
+    }
+
+    #[test]
+    fn version_2_lists_receive_google_account_hosts_once() {
+        let old = "[compat]\nenabled = true\ndefaults_version = 2\ndomains = [\"youtube.com\", \"x.com\"]\n";
+        let config = toml::from_str::<BlanketConfig>(old).unwrap().validated();
+        let domains = &config.compat.domains;
+        for host in ["accounts.google.com", "myaccount.google.com", "mail.google.com"] {
+            assert_eq!(domains.iter().filter(|domain| *domain == host).count(), 1, "{host}");
+        }
+        assert!(!domains.contains(&"google.com".to_owned()), "plain google.com stays on Servo");
+        assert!(!domains.contains(&"twitter.com".to_owned()), "version 2 entries are not re-added");
+        assert_eq!(config.compat.defaults_version, 3);
+        // A host the user removed afterwards stays removed.
+        let mut current = config.clone();
+        current.compat.domains.retain(|domain| domain != "mail.google.com");
+        assert!(!current.validated().compat.domains.contains(&"mail.google.com".to_owned()));
+    }
+
+    #[test]
+    fn google_accounts_use_compat_mode_but_search_does_not() {
+        let url = |text: &str| url::Url::parse(text).unwrap();
+        let compat = CompatConfig::default();
+        assert!(compat.applies_to(&url("https://accounts.google.com/v3/signin/identifier")));
+        assert!(compat.applies_to(&url("https://myaccount.google.com/")));
+        assert!(compat.applies_to(&url("https://mail.google.com/mail/u/0/")));
+        assert!(!compat.applies_to(&url("https://www.google.com/search?q=servo")));
+        assert!(!compat.applies_to(&url("https://google.com/")));
+        assert!(!compat.applies_to(&url("https://docs.google.com/")));
     }
 
     #[test]
